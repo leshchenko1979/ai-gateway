@@ -93,7 +93,7 @@ Returns `{"status": "healthy"}` - no authentication required.
 GET /v1/models
 Headers: X-Api-Key: <gateway-api-key> OR Authorization: Bearer <token>
 ```
-Returns available models from configured routes.
+Returns available route names from the configuration, which serve as the model names for requests.
 
 ### Chat Completions
 ```bash

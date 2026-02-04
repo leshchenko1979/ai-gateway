@@ -1,5 +1,30 @@
 # Recent Changes
 
+## API Behavior Change: Models Endpoint Now Returns Route Names (2026-02-04)
+
+### Overview
+Modified `/v1/models` endpoint to return configured route names instead of hardcoded model list.
+
+### Changes Made
+1. **Handler Update**
+   - Changed `handleModels()` to iterate through configured routes
+   - Returns route names as available model IDs
+   - Removed hardcoded "dynamic/model" response
+
+2. **Test Updates**
+   - Updated `TestHandleModels` to verify route name listing
+   - Tests now expect actual route names from configuration
+
+### Files Modified
+- `server/handlers.go`: Updated models endpoint implementation
+- `server/handlers_test.go`: Updated test expectations
+- `README.md`: Updated API documentation
+
+### Impact
+- API consumers now see actual configured route names when listing models
+- Route names serve as model identifiers for chat completion requests
+- Behavior aligns with the documented "returns available models from configured routes"
+
 ## Major Refactoring: Route-Based Provider Configuration (2026-02-04)
 
 ### Overview

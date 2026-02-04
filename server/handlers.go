@@ -26,16 +26,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleModels handles model listing requests
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	model := types.Model{
-		ID:      "dynamic/model",
-		Object:  "model",
-		Created: 1677610602,
-		OwnedBy: "ai-gateway",
+	var models []types.Model
+
+	// Return route names as available models
+	for _, route := range s.config.Routes {
+		model := types.Model{
+			ID:      route.Name,
+			Object:  "model",
+			Created: 1677610602,
+			OwnedBy: "ai-gateway",
+		}
+		models = append(models, model)
 	}
 
 	response := types.ModelsResponse{
 		Object: "list",
-		Data:   []types.Model{model},
+		Data:   models,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

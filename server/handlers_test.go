@@ -35,9 +35,13 @@ func TestHandleHealth(t *testing.T) {
 }
 
 func TestHandleModels(t *testing.T) {
-	cfg := &config.Config{APIKey: "test-key", Port: 8080}
+	routes := []config.Route{
+		{Name: "test-route-1"},
+		{Name: "test-route-2"},
+	}
+	cfg := &config.Config{APIKey: "test-key", Port: 8080, Routes: routes}
 	logger := logger.NewLogger()
-	manager := providers.NewManager([]config.Provider{}, []config.Route{}, logger)
+	manager := providers.NewManager([]config.Provider{}, routes, logger)
 	srv := NewServer(cfg, logger, manager)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
@@ -51,11 +55,14 @@ func TestHandleModels(t *testing.T) {
 
 	var response types.ModelsResponse
 	json.NewDecoder(rr.Body).Decode(&response)
-	if len(response.Data) == 0 {
-		t.Error("Expected at least one model")
+	if len(response.Data) != 2 {
+		t.Errorf("Expected 2 models, got %d", len(response.Data))
 	}
-	if response.Data[0].ID != "dynamic/model" {
-		t.Errorf("Expected 'dynamic/model', got '%s'", response.Data[0].ID)
+	expectedModels := []string{"test-route-1", "test-route-2"}
+	for i, model := range response.Data {
+		if model.ID != expectedModels[i] {
+			t.Errorf("Expected model ID '%s', got '%s'", expectedModels[i], model.ID)
+		}
 	}
 }
 
