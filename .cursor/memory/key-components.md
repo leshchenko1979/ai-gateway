@@ -32,6 +32,8 @@
   - Raw JSON preservation for passthrough
   - Selective field extraction for logging
   - Request/response truncation for security
+  - **Multimodal content support**: Message.Content handles both string and array formats
+  - Helper methods for content type detection and extraction
 
 ## Data Flow: Request Processing
 

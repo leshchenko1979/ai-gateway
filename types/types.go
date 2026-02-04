@@ -7,6 +7,19 @@ import (
 	"ai-gateway/config"
 )
 
+// ErrorResponse represents a unified error response format
+type ErrorResponse struct {
+	Error ErrorDetails `json:"error"`
+}
+
+// ErrorDetails contains detailed error information
+type ErrorDetails struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
+	Details interface{} `json:"details,omitempty"`
+}
+
 // RouteError represents a detailed error when all route steps fail
 type RouteError struct {
 	Route  config.Route      `json:"route"`
@@ -40,13 +53,57 @@ func truncateContent(content string) string {
 	return content[:maxLength] + "..."
 }
 
+// truncateMessageContent truncates message content (string or array)
+func truncateMessageContent(content json.RawMessage) json.RawMessage {
+	// Try to unmarshal as string
+	var s string
+	if err := json.Unmarshal(content, &s); err == nil {
+		truncated := truncateContent(s)
+		if truncatedBytes, err := json.Marshal(truncated); err == nil {
+			return truncatedBytes
+		}
+	}
+
+	// Try to unmarshal as array
+	var a []interface{}
+	if err := json.Unmarshal(content, &a); err == nil {
+		// For arrays, truncate each text element
+		truncated := make([]interface{}, len(a))
+		for i, item := range a {
+			if itemMap, ok := item.(map[string]interface{}); ok {
+				if itemMap["type"] == "text" {
+					if text, ok := itemMap["text"].(string); ok {
+						truncatedItem := make(map[string]interface{})
+						for k, v := range itemMap {
+							if k == "text" {
+								truncatedItem[k] = truncateContent(text)
+							} else {
+								truncatedItem[k] = v
+							}
+						}
+						truncated[i] = truncatedItem
+						continue
+					}
+				}
+			}
+			truncated[i] = item
+		}
+		if truncatedBytes, err := json.Marshal(truncated); err == nil {
+			return truncatedBytes
+		}
+	}
+
+	// Return original if we can't process it
+	return content
+}
+
 // truncateMessages creates a copy of messages with truncated content
 func truncateMessages(messages []Message) []Message {
 	truncated := make([]Message, len(messages))
 	for i, msg := range messages {
 		truncated[i] = Message{
 			Role:    msg.Role,
-			Content: truncateContent(msg.Content),
+			Content: truncateMessageContent(msg.Content),
 		}
 	}
 	return truncated
@@ -71,8 +128,8 @@ func (r *ChatRequest) TruncateRequestForLogging() *ChatRequest {
 				truncatedMsg := make(map[string]interface{})
 				for k, v := range msgMap {
 					if k == "content" {
-						if content, ok := v.(string); ok {
-							truncatedMsg[k] = truncateContent(content)
+						if contentBytes, err := json.Marshal(v); err == nil {
+							truncatedMsg[k] = json.RawMessage(truncateMessageContent(contentBytes))
 						} else {
 							truncatedMsg[k] = v
 						}
@@ -102,7 +159,7 @@ func truncateChoices(choices []Choice) []Choice {
 	for i, choice := range choices {
 		truncated[i] = Choice{
 			Index:        choice.Index,
-			Message:      Message{Role: choice.Message.Role, Content: truncateContent(choice.Message.Content)},
+			Message:      Message{Role: choice.Message.Role, Content: truncateMessageContent(choice.Message.Content)},
 			FinishReason: choice.FinishReason,
 		}
 	}
@@ -132,8 +189,8 @@ func (r *ChatResponse) TruncateResponseForLogging() *ChatResponse {
 							truncatedMsg := make(map[string]interface{})
 							for msgK, msgV := range msgMap {
 								if msgK == "content" {
-									if content, ok := msgV.(string); ok {
-										truncatedMsg[msgK] = truncateContent(content)
+									if contentBytes, err := json.Marshal(msgV); err == nil {
+										truncatedMsg[msgK] = json.RawMessage(truncateMessageContent(contentBytes))
 									} else {
 										truncatedMsg[msgK] = msgV
 									}
@@ -202,8 +259,36 @@ func (r ChatRequest) MarshalJSON() ([]byte, error) {
 
 // Message represents a chat message
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// ContentAsString returns the content as a string, or empty string if it's an array
+func (m Message) ContentAsString() string {
+	var s string
+	if err := json.Unmarshal(m.Content, &s); err == nil {
+		return s
+	}
+	return ""
+}
+
+// ContentAsArray returns the content as an array of interfaces, or nil if it's a string
+func (m Message) ContentAsArray() []interface{} {
+	var a []interface{}
+	if err := json.Unmarshal(m.Content, &a); err == nil {
+		return a
+	}
+	return nil
+}
+
+// IsContentString returns true if content is a string
+func (m Message) IsContentString() bool {
+	return m.ContentAsArray() == nil
+}
+
+// IsContentArray returns true if content is an array
+func (m Message) IsContentArray() bool {
+	return m.ContentAsArray() != nil
 }
 
 // ChatResponse represents an OpenAI-compatible chat completion response

@@ -494,8 +494,8 @@ func TestManager_Execute_MultipleRoutes(t *testing.T) {
 				t.Fatalf("Execute() error = %v", err)
 			}
 
-			if response.Choices[0].Message.Content != tt.expectedContent {
-				t.Errorf("Expected content '%s', got '%s'", tt.expectedContent, response.Choices[0].Message.Content)
+			if response.Choices[0].Message.ContentAsString() != tt.expectedContent {
+				t.Errorf("Expected content '%s', got '%s'", tt.expectedContent, response.Choices[0].Message.ContentAsString())
 			}
 		})
 	}

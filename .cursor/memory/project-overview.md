@@ -1,7 +1,7 @@
 # AI Gateway - Route-Based Provider Configuration
 
 ## Project Description
-A lightweight, OpenAI-compatible API gateway written in Go that routes requests to AI providers based on exact model name matching. Features route-based provider selection with sequential fallback and conflict resolution for tools/response_format incompatibility.
+A lightweight, OpenAI-compatible API gateway written in Go that routes requests to AI providers based on exact model name matching. Features route-based provider selection with sequential fallback, conflict resolution for tools/response_format incompatibility, and full support for multimodal messages (text + images).
 
 ## Tech Stack
 - **Language**: Go 1.21+

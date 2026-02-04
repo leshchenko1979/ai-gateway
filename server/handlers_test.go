@@ -103,36 +103,71 @@ func TestHandleChatCompletions_AllStepsFail(t *testing.T) {
 		t.Errorf("Expected status 502, got %d", rr.Code)
 	}
 
-	// Should return JSON with route error details
-	var routeErr types.RouteError
-	if err := json.NewDecoder(rr.Body).Decode(&routeErr); err != nil {
-		t.Errorf("Expected JSON RouteError response, got error: %v", err)
+	// Should return unified JSON error response
+	var errorResp types.ErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errorResp); err != nil {
+		t.Errorf("Expected JSON ErrorResponse, got error: %v", err)
+		return
+	}
+
+	// Verify error response structure
+	if errorResp.Error.Type != "execution_error" {
+		t.Errorf("Expected error type 'execution_error', got '%s'", errorResp.Error.Type)
+	}
+	if errorResp.Error.Code != "ROUTE_EXECUTION_FAILED" {
+		t.Errorf("Expected error code 'ROUTE_EXECUTION_FAILED', got '%s'", errorResp.Error.Code)
+	}
+	if errorResp.Error.Message != "All route steps failed" {
+		t.Errorf("Expected error message 'All route steps failed', got '%s'", errorResp.Error.Message)
+	}
+
+	// Verify details contain route error information (JSON unmarshals to map)
+	details, ok := errorResp.Error.Details.(map[string]interface{})
+	if !ok {
+		t.Errorf("Expected details to be a map, got %T", errorResp.Error.Details)
 		return
 	}
 
 	// Verify route information
-	if routeErr.Route.Name != "test-model" {
-		t.Errorf("Expected route name 'test-model', got '%s'", routeErr.Route.Name)
+	routeInfo, ok := details["route"].(map[string]interface{})
+	if !ok {
+		t.Error("Expected route information in details")
+		return
 	}
 
-	// Verify we have one error for the single step
-	if len(routeErr.Errors) != 1 {
-		t.Errorf("Expected 1 step error, got %d", len(routeErr.Errors))
+	if routeInfo["Name"] != "test-model" {
+		t.Errorf("Expected route name 'test-model', got '%s'", routeInfo["Name"])
+	}
+
+	// Verify errors array
+	errors, ok := details["errors"].([]interface{})
+	if !ok {
+		t.Error("Expected errors array in details")
+		return
+	}
+
+	if len(errors) != 1 {
+		t.Errorf("Expected 1 step error, got %d", len(errors))
 		return
 	}
 
 	// Verify step error details
-	stepErr := routeErr.Errors[0]
-	if stepErr.StepIndex != 0 {
-		t.Errorf("Expected step index 0, got %d", stepErr.StepIndex)
+	stepErr, ok := errors[0].(map[string]interface{})
+	if !ok {
+		t.Error("Expected step error to be a map")
+		return
 	}
-	if stepErr.Provider != "provider1" {
-		t.Errorf("Expected provider 'provider1', got '%s'", stepErr.Provider)
+
+	if stepErr["step_index"].(float64) != 0 {
+		t.Errorf("Expected step index 0, got %v", stepErr["step_index"])
 	}
-	if stepErr.Model != "gpt-4" {
-		t.Errorf("Expected model 'gpt-4', got '%s'", stepErr.Model)
+	if stepErr["provider"] != "provider1" {
+		t.Errorf("Expected provider 'provider1', got '%s'", stepErr["provider"])
 	}
-	if stepErr.Error == "" {
+	if stepErr["model"] != "gpt-4" {
+		t.Errorf("Expected model 'gpt-4', got '%s'", stepErr["model"])
+	}
+	if stepErr["error"] == "" {
 		t.Error("Expected non-empty error message")
 	}
 }

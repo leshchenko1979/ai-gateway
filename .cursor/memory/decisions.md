@@ -132,6 +132,44 @@ Implement hierarchical timeout resolution: step timeout → default timeout → 
 - **Configuration simplicity**: Most routes can use default timeout
 - **Provider independence**: Timeouts not tied to provider definitions
 
+## Multimodal Message Support
+
+### Decision
+Support both string and array content formats in message structures to be fully compatible with OpenAI's multimodal API.
+
+### Context
+- OpenAI API allows message content to be either a string or an array of content blocks
+- Array format used for multimodal inputs (text + images)
+- Original implementation only supported string content
+- Error: `"failed to parse messages: json: cannot unmarshal array into Go struct field"`
+
+### Options Considered
+
+#### Option 1: Reject Array Content
+- Pros: Simple, maintains existing code structure
+- Cons: Breaks multimodal functionality, not OpenAI-compatible
+
+#### Option 2: Convert Arrays to Strings
+- Pros: Maintains string interface
+- Cons: Loses structured content information, potential data loss
+
+#### Option 3: Support Both Formats (Chosen)
+- Pros: Full OpenAI compatibility, preserves all data
+- Cons: More complex type handling
+
+### Rationale
+- **API Compatibility**: Must support full OpenAI API specification
+- **Future-proofing**: Multimodal is becoming standard for AI APIs
+- **Data Preservation**: No loss of structured content information
+- **Backward Compatibility**: Existing string-only requests continue to work
+
+### Implementation Details
+- `Message.Content` changed from `string` to `json.RawMessage`
+- Added helper methods for type detection and extraction
+- Validation updated to accept both formats
+- Enhanced error logging for debugging parsing issues
+- Content truncation logic updated for both string and array formats
+
 ## Error Response Strategy
 
 ### Decision

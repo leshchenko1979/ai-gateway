@@ -1,5 +1,45 @@
 # Recent Changes
 
+## Multimodal Message Support: Enhanced Content Parsing (2026-02-04)
+
+### Overview
+Added support for OpenAI's multimodal message format where content can be either a string (text-only) or an array of content blocks (text + images). Enhanced error logging to include request details when validation fails.
+
+### Changes Made
+1. **Message Structure Update**
+   - Changed `Message.Content` from `string` to `json.RawMessage` to support both formats
+   - Added helper methods: `ContentAsString()`, `ContentAsArray()`, `IsContentString()`, `IsContentArray()`
+
+2. **Enhanced Validation**
+   - Updated `validateChatRequest()` to accept both string and array content formats
+   - Added specific validation for multimodal content arrays (must have elements)
+   - Improved error messages to distinguish between different validation failures
+
+3. **Improved Error Logging**
+   - Validation failures now include truncated request JSON in error logs
+   - Helps debug parsing errors by showing exact request structure that caused issues
+
+4. **Test Updates**
+   - Fixed test comparisons to use new `ContentAsString()` method
+   - All tests passing after changes
+
+### Files Modified
+- `types/types.go`: Message struct and helper methods, content truncation logic
+- `server/validation.go`: Enhanced validation for multimodal content
+- `server/handlers.go`: Added request details to validation error logs
+- `providers/manager_test.go`: Updated test assertions for new content format
+
+### Impact
+- Gateway now supports multimodal requests (text + images) as per OpenAI API specification
+- Better debugging capability when message parsing errors occur
+- Backward compatible with existing string-only content requests
+- No breaking changes to API contract
+
+### Root Cause
+The original error `"failed to parse messages: json: cannot unmarshal array into Go struct field Message.messages.content of type string"` occurred because OpenAI's API allows message content to be either:
+- A string (simple text messages)
+- An array of content blocks (multimodal messages with text + images)
+
 ## API Behavior Change: Models Endpoint Now Returns Route Names (2026-02-04)
 
 ### Overview
