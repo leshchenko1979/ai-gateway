@@ -1,0 +1,40 @@
+# Environment variables
+.env
+
+# Configuration files with sensitive data
+config.yaml
+
+# Binary
+ai-gateway
+ai-gateway-linux
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Build cache
+.build_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Helper scripts
+ssh-helper.sh
+
+# OS
+.DS_Store
+Thumbs.db

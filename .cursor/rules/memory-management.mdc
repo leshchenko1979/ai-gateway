@@ -1,0 +1,54 @@
+---
+description: Memory files for context persistence between sessions
+alwaysApply: true
+---
+
+# Memory Management
+
+Maintain persistent context across sessions using memory files in `.cursor/memory/`.
+
+## Memory Files Structure
+
+Create these files in `.cursor/memory/`:
+
+- `project-overview.md` - High-level project description, tech stack, architecture
+- `recent-changes.md` - Last 5 major changes, ongoing work, blockers
+- `key-components.md` - Core modules, data flows, integration points
+- `decisions.md` - Important architectural decisions and rationale
+
+## Session Initialization
+
+At the start of each chat:
+1. Load all memory files from `.cursor/memory/`
+2. Display project context summary
+3. Note any gaps requiring updates
+
+## Auto-Generation
+
+If memory files don't exist:
+1. Scan codebase for key patterns:
+   - Read `README.md`, `package.json`, main entry files
+   - Analyze folder structure and file naming
+   - Identify main technologies and frameworks
+2. Generate initial memory files with discovered context
+3. Cross-link related concepts between files
+
+## Maintenance Rules
+
+- **Concise**: Each file under 200 lines, focus on facts not explanations
+- **Cross-linked**: Reference related concepts with `[link](#file.md)`
+- **Current**: Update after major changes or weekly reviews
+- **Actionable**: Include concrete next steps and decisions needed
+
+## Planning Integration
+
+In planning mode, always include:
+- "Review and update memory bank files"
+- "Document new architectural decisions"
+- "Update project overview with recent changes"
+
+Example cross-linking:
+```
+Key API endpoints in [key-components.md](#key-components.md)
+Recent auth changes in [recent-changes.md](#recent-changes.md)
+```

@@ -1,0 +1,14 @@
+api_key: ${GATEWAY_API_KEY}
+port: 8080
+providers:
+  - name: provider1
+    api_key: ${PROVIDER1_API_KEY}
+    base_url: https://api.provider1.com/v1
+    model: gpt-4
+    timeout: 30s
+
+  - name: provider2
+    api_key: ${PROVIDER2_API_KEY}
+    base_url: https://api.provider2.com/v1
+    model: claude-3-opus
+    timeout: 30s

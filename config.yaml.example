@@ -1,0 +1,29 @@
+api_key: ${GATEWAY_API_KEY}
+port: 8080
+default_timeout: 300s
+
+providers:
+  - name: cerebras
+    api_key: ${CEREBRAS_API_KEY}
+    base_url: https://api.cerebras.ai/v1
+
+  - name: openrouter
+    api_key: ${OPENROUTER_API_KEY}
+    base_url: https://openrouter.ai/api/v1
+
+routes:
+  - name: dynamic/n8n
+    steps:
+      - provider: cerebras
+        model: gpt-oss-120b
+        conflict_resolution: tools
+      - provider: openrouter
+        model: nvidia/nemotron-3-nano-30b-a3b:free
+
+  - name: dynamic/model
+    steps:
+      - provider: cerebras
+        model: gpt-oss-120b
+        conflict_resolution: tools
+      - provider: openrouter
+        model: nvidia/nemotron-3-nano-30b-a3b:free

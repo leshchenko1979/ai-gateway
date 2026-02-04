@@ -1,0 +1,26 @@
+[Unit]
+Description=AI Gateway - OpenAI-compatible API gateway
+After=network.target
+
+[Service]
+Type=simple
+User=ai-gateway
+Group=ai-gateway
+ExecStart=/usr/local/bin/ai-gateway
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/ai-gateway
+
+# Environment
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=multi-user.target
