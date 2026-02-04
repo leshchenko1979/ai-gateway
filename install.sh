@@ -58,14 +58,7 @@ build() {
     print_info "Build complete!"
 }
 
-# Build the binary for Linux x86_64 (for remote deployment)
-build_linux() {
-    print_info "Building $BINARY_NAME for Linux x86_64..."
-    GOOS=linux GOARCH=amd64 go build -o $BINARY_NAME .
-    print_info "Build complete!"
-}
-
-# Install the binary
+# Install the binary locally
 install() {
     if [ ! -f "$BINARY_NAME" ]; then
         print_error "Binary not found. Run './install.sh build' first."
@@ -76,6 +69,81 @@ install() {
     sudo cp $BINARY_NAME $INSTALL_DIR/
     sudo chmod +x $INSTALL_DIR/$BINARY_NAME
     print_info "Installation complete!"
+}
+
+# Install systemd service (local)
+install_service() {
+    if [ ! -f "$BINARY_NAME" ]; then
+        print_error "Binary not found. Run './install.sh build' first."
+        exit 1
+    fi
+
+    # Create service user if it doesn't exist
+    if ! id "$SERVICE_USER" &>/dev/null; then
+        print_info "Creating service user: $SERVICE_USER"
+        sudo useradd -r -s /bin/false $SERVICE_USER
+    fi
+
+    # Create config directory
+    print_info "Creating config directory: $CONFIG_DIR"
+    sudo mkdir -p $CONFIG_DIR
+    sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR
+    sudo chmod 755 $CONFIG_DIR
+
+    # Copy config file if it doesn't exist
+    if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
+        if [ -f "config.yaml" ]; then
+            print_info "Copying config file to $CONFIG_DIR"
+            sudo cp config.yaml $CONFIG_DIR/
+            sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/config.yaml
+            sudo chmod 600 $CONFIG_DIR/config.yaml
+        else
+            print_warning "No config.yaml found. Please create one at $CONFIG_DIR/config.yaml"
+        fi
+    fi
+
+    # Install binary
+    install
+
+    # Create systemd service file
+    print_info "Creating systemd service file..."
+    sudo tee $SERVICE_DIR/ai-gateway.service > /dev/null <<EOF
+[Unit]
+Description=AI Gateway - OpenAI-compatible API gateway
+After=network.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+ExecStart=$INSTALL_DIR/$BINARY_NAME
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$CONFIG_DIR
+
+# Environment
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Reload systemd
+    print_info "Reloading systemd daemon..."
+    sudo systemctl daemon-reload
+
+    print_info "Service installed! Use the following commands to manage it:"
+    echo "  sudo systemctl start ai-gateway"
+    echo "  sudo systemctl enable ai-gateway"
+    echo "  sudo systemctl status ai-gateway"
 }
 
 # Execute command on remote server via SSH
@@ -284,106 +352,17 @@ REMOTE_INSTALL
     print_info "Service is running on ${SSH_HOST}"
 }
 
-# Install systemd service (local)
-install_service() {
-    if [ ! -f "$BINARY_NAME" ]; then
-        print_error "Binary not found. Run './install.sh build' first."
-        exit 1
-    fi
 
-    # Create service user if it doesn't exist
-    if ! id "$SERVICE_USER" &>/dev/null; then
-        print_info "Creating service user: $SERVICE_USER"
-        sudo useradd -r -s /bin/false $SERVICE_USER
-    fi
-
-    # Create config directory
-    print_info "Creating config directory: $CONFIG_DIR"
-    sudo mkdir -p $CONFIG_DIR
-    sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR
-    sudo chmod 755 $CONFIG_DIR
-
-    # Copy config file if it doesn't exist
-    if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
-        if [ -f "config.yaml" ]; then
-            print_info "Copying config file to $CONFIG_DIR"
-            sudo cp config.yaml $CONFIG_DIR/
-            sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/config.yaml
-            sudo chmod 600 $CONFIG_DIR/config.yaml
-        else
-            print_warning "No config.yaml found. Please create one at $CONFIG_DIR/config.yaml"
-        fi
-    fi
-
-    # Install binary
-    install
-
-    # Create systemd service file
-    print_info "Creating systemd service file..."
-    sudo tee $SERVICE_DIR/ai-gateway.service > /dev/null <<EOF
-[Unit]
-Description=AI Gateway - OpenAI-compatible API gateway
-After=network.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-Group=$SERVICE_USER
-ExecStart=$INSTALL_DIR/$BINARY_NAME
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-# Security settings
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=$CONFIG_DIR
-
-# Environment
-Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # Reload systemd
-    print_info "Reloading systemd daemon..."
-    sudo systemctl daemon-reload
-
-    print_info "Service installed! Use the following commands to manage it:"
-    echo "  sudo systemctl start ai-gateway"
-    echo "  sudo systemctl enable ai-gateway"
-    echo "  sudo systemctl status ai-gateway"
-}
-
-# Run tests
-test() {
-    print_info "Running tests..."
-    go test -v ./...
-    print_info "Tests complete!"
-}
-
-# Run tests with coverage
-test_coverage() {
-    print_info "Running tests with coverage..."
-    go test -cover ./...
-    print_info "Coverage report complete!"
-}
 
 # Show usage
 usage() {
-    echo "Usage: $0 {build|install|install-service|deploy|test|test-coverage}"
+    echo "Usage: $0 {build|install|install-service|deploy}"
     echo ""
     echo "Commands:"
-    echo "  build           - Build the binary"
+    echo "  build           - Build the binary locally"
     echo "  install         - Install the binary to $INSTALL_DIR (local)"
     echo "  install-service - Install binary and systemd service (local)"
     echo "  deploy          - Build and deploy to remote server via SSH"
-    echo "  test            - Run tests"
-    echo "  test-coverage   - Run tests with coverage report"
     echo ""
     echo "Remote Deployment (for 'deploy' command):"
     echo "  SSH_HOST        - Remote server hostname or IP (required)"
@@ -409,12 +388,6 @@ case "$1" in
         ;;
     deploy)
         deploy
-        ;;
-    test)
-        test
-        ;;
-    test-coverage)
-        test_coverage
         ;;
     *)
         usage
