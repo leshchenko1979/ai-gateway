@@ -58,6 +58,12 @@ build() {
     print_info "Build complete!"
 }
 
+build_linux() {
+    print_info "Building $BINARY_NAME for Linux x86_64..."
+    GOOS=linux GOARCH=amd64 go build -o $BINARY_NAME .
+    print_info "Linux build complete!"
+}
+
 # Install the binary locally
 install() {
     if [ ! -f "$BINARY_NAME" ]; then
