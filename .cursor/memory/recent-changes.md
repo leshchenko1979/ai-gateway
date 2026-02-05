@@ -157,3 +157,31 @@ Added environment-driven telemetry so traces and structured logs stream to which
 ### Impact
 - Observability is no longer tied to Grafana Cloud; any OTLP collector can receive telemetry.
 - Routes, steps, and logger output now appear together, making distributed tracing easier to correlate with structured logs.
+
+## OTLP Exporter Switch & Auth Fix (2026-02-05)
+
+### Overview
+Switched from gRPC to HTTP for OTLP exporting to improve compatibility and resolved authentication issues with Grafana Cloud.
+
+### Changes Made
+1. **HTTP Exporter Migration**
+   - Replaced `otlptracegrpc` with `otlptracehttp`.
+   - Bypasses common gRPC/ALPN handshake issues on restricted networks.
+   - Improved endpoint normalization to handle both `host:port` and full URLs with paths.
+
+2. **Grafana Cloud Auth Automation**
+   - Added automatic detection and parsing of `glc_` prefixed Access Policy Tokens.
+   - Extracts **Stack ID** from the token's base64-encoded JSON to use as the Basic auth username.
+   - Fallback to standard Basic auth (`apiKey:`) for other token types.
+
+3. **Path Normalization**
+   - Enhanced `normalizeEndpoint` to ensure the `/v1/traces` signal path is correctly appended or handled when a custom path (like `/otlp`) is provided.
+
+4. **Standard OTEL Env Var Support**
+   - Added support for `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`.
+   - Maintained backward compatibility with `OTLP_` prefixed variables.
+
+### Impact
+- Telemetry now works reliably on VDS environments where gRPC might be unstable or blocked.
+- Zero-config authentication for Grafana Cloud users (just provide the `glc_` token).
+- Better compliance with standard OpenTelemetry environment variables.

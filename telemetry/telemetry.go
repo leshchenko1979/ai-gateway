@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -13,13 +12,10 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
@@ -39,7 +35,12 @@ func Init(ctx context.Context) (func(context.Context) error, error) {
 	providerOnce.Do(func() {
 		endpoint := strings.TrimSpace(os.Getenv("OTLP_ENDPOINT"))
 		apiKey := strings.TrimSpace(os.Getenv("OTLP_API_KEY"))
-		serviceName := strings.TrimSpace(os.Getenv("OTLP_SERVICE_NAME"))
+
+		// Try standard OTEL env vars first, then OTLP prefixes for compatibility
+		serviceName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME"))
+		if serviceName == "" {
+			serviceName = strings.TrimSpace(os.Getenv("OTLP_SERVICE_NAME"))
+		}
 		if serviceName == "" {
 			serviceName = "ai-gateway"
 		}
@@ -118,8 +119,35 @@ func RecordLog(ctx context.Context, level, message string, fields map[string]int
 }
 
 func newTraceExporter(ctx context.Context, endpoint, apiKey string) (*otlptrace.Exporter, error) {
+	// For Grafana Cloud, the API key might be a "glc_" prefixed token.
+	// Grafana Cloud OTLP HTTP requires Basic auth with InstanceID as username and API Key as password.
+	// We'll try to extract the InstanceID from the glc_ token (which contains base64 encoded JSON).
+	authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(apiKey+":")))
+	if strings.HasPrefix(apiKey, "glc_") {
+		tokenPart := strings.TrimPrefix(apiKey, "glc_")
+		if decoded, err := base64.StdEncoding.DecodeString(tokenPart); err == nil {
+			// Try to extract the instance ID from the "o" (org) or "n" (name) fields.
+			// In Grafana Cloud, the OTLP instance ID is often the Org ID or Stack ID.
+			instanceID := ""
+			if idx := strings.Index(string(decoded), "\"n\":\"stack-"); idx != -1 {
+				idPart := string(decoded)[idx+11:]
+				if endIdx := strings.Index(idPart, "-"); endIdx != -1 {
+					instanceID = idPart[:endIdx]
+				}
+			} else if idx := strings.Index(string(decoded), "\"o\":\""); idx != -1 {
+				idPart := string(decoded)[idx+5:]
+				if endIdx := strings.Index(idPart, "\""); endIdx != -1 {
+					instanceID = idPart[:endIdx]
+				}
+			}
+			if instanceID != "" {
+				authHeader = fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(instanceID+":"+apiKey)))
+			}
+		}
+	}
+
 	headers := map[string]string{
-		"Authorization": fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(apiKey+":"))),
+		"Authorization": authHeader,
 	}
 
 	if extra := strings.TrimSpace(os.Getenv("OTLP_HEADERS")); extra != "" {
@@ -132,50 +160,54 @@ func newTraceExporter(ctx context.Context, endpoint, apiKey string) (*otlptrace.
 		}
 	}
 
-	var addr string
-	var opts []otlptracegrpc.Option
-
-	// Special handling for IP address endpoints to set correct TLS server name and ALPN
-	if strings.Contains(endpoint, "3.78.14.180") {
-		addr = endpoint
-		tlsConfig := &tls.Config{
-			ServerName: "otlp-gateway-prod-eu-west-2.grafana.net",
-			NextProtos: []string{"h2"}, // HTTP/2 for gRPC
-		}
-		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsConfig)))
-	} else {
-		addr, opts = normalizeEndpoint(endpoint)
-	}
-
+	addr, opts := normalizeEndpoint(endpoint)
 	opts = append(opts,
-		otlptracegrpc.WithEndpoint(addr),
-		otlptracegrpc.WithHeaders(headers),
+		otlptracehttp.WithEndpoint(addr),
+		otlptracehttp.WithHeaders(headers),
 	)
 
-	return otlptracegrpc.New(ctx, opts...)
+	return otlptracehttp.New(ctx, opts...)
 }
 
-func normalizeEndpoint(raw string) (string, []otlptracegrpc.Option) {
-	opts := make([]otlptracegrpc.Option, 0, 2)
+func normalizeEndpoint(raw string) (string, []otlptracehttp.Option) {
+	opts := make([]otlptracehttp.Option, 0, 2)
 	address := raw
+
+	// Handle protocol
 	if strings.HasPrefix(raw, "https://") {
 		address = strings.TrimPrefix(raw, "https://")
-		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewClientTLSFromCert(nil, "")))
+		// TLS is default for https://
 	} else if strings.HasPrefix(raw, "http://") {
 		address = strings.TrimPrefix(raw, "http://")
-		opts = append(opts, otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())))
-	} else {
-		// Default to TLS
-		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewClientTLSFromCert(nil, "")))
+		opts = append(opts, otlptracehttp.WithInsecure())
 	}
-	return strings.TrimSuffix(address, "/"), opts
+
+	// In OTLP HTTP, the exporter appends /v1/traces by default.
+	// If the user provided a path, we must ensure it includes /v1/traces.
+	if parts := strings.SplitN(address, "/", 2); len(parts) > 1 {
+		address = parts[0]
+		path := "/" + strings.TrimSuffix(parts[1], "/")
+		if !strings.HasSuffix(path, "/v1/traces") {
+			path = path + "/v1/traces"
+		}
+		opts = append(opts, otlptracehttp.WithURLPath(path))
+	}
+
+	return address, opts
 }
 
 func buildResource(serviceName string) (*resource.Resource, error) {
 	attrs := []attribute.KeyValue{
 		attribute.String("service.name", serviceName),
 	}
-	if extra := strings.TrimSpace(os.Getenv("OTLP_RESOURCE_ATTRIBUTES")); extra != "" {
+
+	// Try standard OTEL env var first, then OTLP prefix for compatibility
+	extra := strings.TrimSpace(os.Getenv("OTEL_RESOURCE_ATTRIBUTES"))
+	if extra == "" {
+		extra = strings.TrimSpace(os.Getenv("OTLP_RESOURCE_ATTRIBUTES"))
+	}
+
+	if extra != "" {
 		for _, pair := range strings.Split(extra, ",") {
 			kv := strings.SplitN(pair, "=", 2)
 			if len(kv) != 2 {

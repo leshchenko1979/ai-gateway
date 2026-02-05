@@ -36,8 +36,12 @@
   - Helper methods for content type detection and extraction
 
 ### Telemetry (`telemetry/`)
-- **Purpose**: Initializes the OTLP exporter that sends traces and logger events to whichever collector `OTLP_*` env vars point to.
-- **Key Components**: Resource builders, trace provider setup, `RecordLog` helper, and wrapper tracer helpers used by `server` and `providers`.
+- **Purpose**: Initializes the **OTLP/HTTP exporter** that sends traces and logger events to whichever collector `OTEL_*` or `OTLP_*` env vars point to.
+- **Key Components**: 
+  - **`newTraceExporter()`**: Supports **automatic Grafana Cloud authentication** by parsing `glc_` tokens.
+  - **`normalizeEndpoint()`**: Intelligent URL and signal path handling.
+  - **`RecordLog()`**: Reusable helper that replays logger entries into OTLP.
+  - **Standard Compliance**: Supports both standard `OTEL_` and legacy `OTLP_` environment variables.
 
 ## Data Flow: Request Processing
 

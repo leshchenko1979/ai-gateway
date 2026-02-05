@@ -224,3 +224,34 @@ Use an environment-driven OTLP exporter so traces and structured logger events f
 - **Flexibility**: Operators choose `OTLP_ENDPOINT`, `OTLP_API_KEY`, `OTLP_SERVICE_NAME`, and other env vars to match their collector.
 - **Consistency**: Logger still outputs JSON but also emits OTLP events via `telemetry.RecordLog`, giving traces and logs the same timeline.
 - **Minimal config impact**: Observability settings stay in `.env`/env vars so `config.yaml.example` remains about providers/routes.
+
+## OTLP/HTTP for Compatibility (2026-02-05)
+
+### Decision
+Switch from OTLP/gRPC to OTLP/HTTP for exporting telemetry and structured logs.
+
+### Context
+- The initial gRPC implementation failed on some environments (VDS) with `Unavailable` errors and ALPN handshake failures.
+- Grafana Cloud and other modern OTLP collectors fully support HTTP/JSON or HTTP/Protobuf.
+- Authentication with `glc_` tokens in Grafana Cloud requires a specific `instanceID:apiKey` Basic auth format, which was tricky for users to configure manually.
+
+### Options Considered
+
+#### Option 1: Stick with gRPC and fix TLS/ALPN
+- Pros: Slightly more efficient than HTTP.
+- Cons: Complex to debug across different network environments and OS versions.
+
+#### Option 2: Switch to HTTP (Chosen)
+- Pros: Highly compatible, works through most firewalls/proxies, easier to debug with standard tools.
+- Cons: Slightly higher overhead than gRPC (negotiation/headers).
+
+### Rationale
+- **Compatibility**: HTTP is a "fire and forget" solution for connectivity issues encountered with gRPC.
+- **Ease of Use**: By using HTTP, we could implement a custom `normalizeEndpoint` and authentication logic that handles `glc_` tokens automatically, making the gateway "just work" with Grafana Cloud.
+- **Standardization**: Most OTLP collectors (including Grafana Alloy and Grafana Cloud) recommend HTTP as a robust alternative to gRPC.
+
+### Implementation Details
+- Used `otlptracehttp` exporter.
+- Added logic to parse `glc_` tokens and extract the Org/Stack ID to use as the Basic auth username.
+- Implemented intelligent path handling: if the user provides `.../otlp`, the exporter correctly appends `/v1/traces`.
+- Added support for `OTEL_` standard environment variables alongside `OTLP_` overrides.
