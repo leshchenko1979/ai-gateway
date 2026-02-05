@@ -20,6 +20,7 @@ ProtectHome=true
 ReadWritePaths=/etc/ai-gateway
 
 # Environment
+EnvironmentFile=/etc/ai-gateway/.env
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 
 [Install]

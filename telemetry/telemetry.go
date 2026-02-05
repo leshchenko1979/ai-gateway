@@ -2,8 +2,10 @@ package telemetry
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -45,6 +47,7 @@ func Init(ctx context.Context) (func(context.Context) error, error) {
 		var tp *sdktrace.TracerProvider
 		if endpoint == "" || apiKey == "" {
 			tp = sdktrace.NewTracerProvider()
+			log.Println("Telemetry not configured: set OTLP_ENDPOINT and OTLP_API_KEY to enable tracing/exporting.")
 		} else {
 			exporter, err := newTraceExporter(ctx, endpoint, apiKey)
 			if err != nil {
@@ -68,6 +71,9 @@ func Init(ctx context.Context) (func(context.Context) error, error) {
 		initialized = true
 		shutdown = func(stopCtx context.Context) error {
 			return tp.Shutdown(stopCtx)
+		}
+		if endpoint != "" && apiKey != "" {
+			log.Printf("Telemetry initialized: endpoint=%s service=%s", endpoint, serviceName)
 		}
 	})
 
@@ -126,7 +132,21 @@ func newTraceExporter(ctx context.Context, endpoint, apiKey string) (*otlptrace.
 		}
 	}
 
-	addr, opts := normalizeEndpoint(endpoint)
+	var addr string
+	var opts []otlptracegrpc.Option
+
+	// Special handling for IP address endpoints to set correct TLS server name and ALPN
+	if strings.Contains(endpoint, "3.78.14.180") {
+		addr = endpoint
+		tlsConfig := &tls.Config{
+			ServerName: "otlp-gateway-prod-eu-west-2.grafana.net",
+			NextProtos: []string{"h2"}, // HTTP/2 for gRPC
+		}
+		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsConfig)))
+	} else {
+		addr, opts = normalizeEndpoint(endpoint)
+	}
+
 	opts = append(opts,
 		otlptracegrpc.WithEndpoint(addr),
 		otlptracegrpc.WithHeaders(headers),

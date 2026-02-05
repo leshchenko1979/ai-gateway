@@ -96,6 +96,14 @@ install_service() {
     sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR
     sudo chmod 755 $CONFIG_DIR
 
+    # Copy env file if provided
+    if [ -f ".env" ]; then
+        print_info "Copying .env file to $CONFIG_DIR"
+        sudo cp .env $CONFIG_DIR/.env
+        sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
+        sudo chmod 600 $CONFIG_DIR/.env
+    fi
+
     # Copy config file if it doesn't exist
     if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
         if [ -f "config.yaml" ]; then
@@ -136,6 +144,7 @@ ProtectHome=true
 ReadWritePaths=$CONFIG_DIR
 
 # Environment
+EnvironmentFile=$CONFIG_DIR/.env
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 
 [Install]
@@ -209,8 +218,47 @@ tar_copy() {
 
     # Create tar archive with all needed files and stream to remote
     print_info "Creating deployment archive and streaming to remote server..."
-    tar czf - --format=ustar -C . "$BINARY_NAME" $( [ -f "ai-gateway.service" ] && echo "ai-gateway.service" ) $( [ -f "config.yaml" ] && echo "config.yaml" ) 2>/dev/null | \
+    tar czf - --format=ustar -C . "$BINARY_NAME" $( [ -f "ai-gateway.service" ] && echo "ai-gateway.service" ) $( [ -f "config.yaml" ] && echo "config.yaml" ) $( [ -f ".env" ] && echo ".env" ) 2>/dev/null | \
     ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_TMP_DIR"
+}
+
+# Copy deployment artifacts using rsync when available for faster transfers
+copy_payload_to_remote() {
+    local files=("$BINARY_NAME")
+    if [ -f "ai-gateway.service" ]; then
+        files+=("ai-gateway.service")
+    fi
+    if [ -f "config.yaml" ]; then
+        files+=("config.yaml")
+    fi
+    if [ -f ".env" ]; then
+        files+=(".env")
+    fi
+
+    if [ ${#files[@]} -eq 0 ]; then
+        print_error "No deployment artifacts found to copy."
+        exit 1
+    fi
+
+    print_info "Preparing deployment files for transfer: ${files[*]}"
+
+    if command -v rsync &>/dev/null; then
+        print_info "Using rsync for faster transfer to ${SSH_USER}@${SSH_HOST}"
+        local rsync_ssh="ssh"
+        if [ -n "$SSH_KEY" ]; then
+            rsync_ssh="$rsync_ssh -i $SSH_KEY"
+        fi
+        if [ -n "$SSH_PORT" ]; then
+            rsync_ssh="$rsync_ssh -p $SSH_PORT"
+        fi
+        rsync_ssh="$rsync_ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+
+        local remote_dest="${SSH_USER}@${SSH_HOST}:${REMOTE_TMP_DIR}/"
+        rsync -az --progress -e "$rsync_ssh" "${files[@]}" "$remote_dest"
+    else
+        print_info "rsync not available; falling back to tar-based streaming copy"
+        tar_copy
+    fi
 }
 
 # Remove old service version on remote
@@ -262,8 +310,8 @@ deploy() {
     print_info "Preparing remote server..."
     ssh_exec "mkdir -p $REMOTE_TMP_DIR"
 
-    # Copy all files to remote using tar pipeline
-    tar_copy
+    # Copy all files to remote (rsync preferred, tar fallback)
+    copy_payload_to_remote
 
     # Remove old service
     remove_old_service
@@ -323,6 +371,7 @@ ProtectHome=true
 ReadWritePaths=$CONFIG_DIR
 
 # Environment
+EnvironmentFile=$CONFIG_DIR/.env
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 
 [Install]
@@ -335,6 +384,11 @@ EOF
             cp $REMOTE_TMP_DIR/config.yaml $CONFIG_DIR/
             chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/config.yaml
             chmod 600 $CONFIG_DIR/config.yaml
+        fi
+        if [ -f "$REMOTE_TMP_DIR/.env" ]; then
+            cp $REMOTE_TMP_DIR/.env $CONFIG_DIR/.env
+            chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
+            chmod 600 $CONFIG_DIR/.env
         fi
 
         # Reload systemd
