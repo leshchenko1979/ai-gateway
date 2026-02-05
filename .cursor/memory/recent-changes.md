@@ -137,3 +137,23 @@ Complete architectural refactoring from provider-centric to route-based configur
 - None identified - refactoring completed successfully
 - All tests passing
 - Configuration migration completed
+
+## Observability: Generic OTLP telemetry (2026-02-05)
+
+### Overview
+Added environment-driven telemetry so traces and structured logs stream to whichever OTLP backend operators configure, keeping the stack vendor-agnostic.
+
+### Changes Made
+1. **Telemetry Core**
+   - Introduced `telemetry/` to initialize trace providers, build resource attributes, and expose a reusable `RecordLog` helper that replays logger entries into OTLP.
+   - Logger now posts every `Info`/`Error` call through `telemetry.RecordLog`, aligning logs with trace data.
+2. **Request Spans**
+   - HTTP routes are wrapped with a lightweight tracer that annotates HTTP metadata and propagates the context into route execution.
+   - `providers.Manager` now records route/step spans, durations, and errors before falling back between providers.
+3. **Docs & Configuration**
+   - Documented `OTLP_ENDPOINT`, `OTLP_API_KEY`, `OTLP_SERVICE_NAME`, `OTLP_RESOURCE_ATTRIBUTES`, and `OTLP_HEADERS` in `README.md` and `.env.example`.
+   - Kept `config.yaml.example` OTLP-free while `.env.example` highlights the shared telemetry settings.
+
+### Impact
+- Observability is no longer tied to Grafana Cloud; any OTLP collector can receive telemetry.
+- Routes, steps, and logger output now appear together, making distributed tracing easier to correlate with structured logs.

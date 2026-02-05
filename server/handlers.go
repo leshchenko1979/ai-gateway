@@ -107,13 +107,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Log request summary with truncated JSON
 	s.logger.Info("Chat completion request", map[string]interface{}{
 		"request_id":   requestID,
-		"model":       req.Model,
-		"messages":    messageCount,
+		"model":        req.Model,
+		"messages":     messageCount,
 		"request_json": string(requestJSON),
 	})
 
 	// Execute route for the requested model
-	response, err := s.manager.ExecuteWithTracing(req, requestID)
+	response, err := s.manager.ExecuteWithTracing(r.Context(), req, requestID)
 	if err != nil {
 		s.logger.Error("Request execution failed", err, map[string]interface{}{
 			"request_id": requestID,

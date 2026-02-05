@@ -10,14 +10,18 @@ import (
 	"ai-gateway/config"
 	"ai-gateway/logger"
 	"ai-gateway/providers"
+	"ai-gateway/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Server represents the HTTP server
 type Server struct {
-	config   *config.Config
-	manager  *providers.Manager
-	logger   *logger.Logger
-	httpSrv  *http.Server
+	config  *config.Config
+	manager *providers.Manager
+	logger  *logger.Logger
+	httpSrv *http.Server
 }
 
 // NewServer creates a new server instance
@@ -53,13 +57,29 @@ func (s *Server) setupRoutes() http.Handler {
 	mux.HandleFunc("/v1/models", s.authMiddleware(s.handleModels))
 	mux.HandleFunc("/v1/chat/completions", s.authMiddleware(s.handleChatCompletions))
 
-	return mux
+	return s.instrument(mux)
+}
+
+func (s *Server) instrument(next http.Handler) http.Handler {
+	tracer := telemetry.Tracer("ai-gateway.server")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, span := tracer.Start(r.Context(), fmt.Sprintf("http.%s", r.URL.Path),
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				attribute.String("http.method", r.Method),
+				attribute.String("http.route", r.URL.Path),
+			),
+		)
+		defer span.End()
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // Start starts the HTTPS server
 func (s *Server) Start() error {
 	s.logger.Info("Starting server", map[string]interface{}{
-		"port": s.config.Port,
+		"port":      s.config.Port,
 		"providers": len(s.config.Providers),
 	})
 

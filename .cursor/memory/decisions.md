@@ -195,3 +195,32 @@ Return 404 for unmatched models, 502 for execution failures.
 - **Debugging**: Clear distinction between config and runtime issues
 - **API design**: Follows REST conventions
 - **Client handling**: Allows different retry strategies for different error types
+
+## OTLP Observability
+
+### Decision
+Use an environment-driven OTLP exporter so traces and structured logger events flow through whichever collector the operator configures.
+
+### Context
+- Instrumentation already touches request handling and logging, so routing both through OTLP maximizes observability.
+- The deployment workflow centers on `.env` and `install.sh`, making environment variables the natural control point for OTLP settings.
+- Locking to a vendor like Grafana Cloud would duplicate documentation and restrict operators who prefer another collector.
+
+### Options Considered
+
+#### Option 1: Vendor-specific telemetry (e.g., Grafana Cloud)
+- Pros: Ready-made instructions and dashboards
+- Cons: Tight coupling and duplicate documentation for env vars
+
+#### Option 2: Env-driven OTLP exporter (Chosen)
+- Pros: Works with any collector, keeps `config.yaml.example` focused on routes, makes logs+traces share one pipeline
+- Cons: Requires manual instrumentation (span wrappers) and Basic auth header handling
+
+#### Option 3: Skip telemetry
+- Pros: No new dependencies
+- Cons: Loses distributed tracing and log correlation
+
+### Rationale
+- **Flexibility**: Operators choose `OTLP_ENDPOINT`, `OTLP_API_KEY`, `OTLP_SERVICE_NAME`, and other env vars to match their collector.
+- **Consistency**: Logger still outputs JSON but also emits OTLP events via `telemetry.RecordLog`, giving traces and logs the same timeline.
+- **Minimal config impact**: Observability settings stay in `.env`/env vars so `config.yaml.example` remains about providers/routes.

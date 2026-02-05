@@ -1,9 +1,12 @@
 package logger
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"strings"
+
+	"ai-gateway/telemetry"
 )
 
 // Logger provides structured logging with API key redaction
@@ -28,6 +31,7 @@ func (l *Logger) AddRedactKey(key string) {
 // Info logs an info message with structured fields
 func (l *Logger) Info(message string, fields map[string]interface{}) {
 	l.log("INFO", message, fields, nil)
+	telemetry.RecordLog(context.Background(), "info", message, fields)
 }
 
 // Error logs an error message with structured fields
@@ -39,6 +43,7 @@ func (l *Logger) Error(message string, err error, fields map[string]interface{})
 		fields["error"] = err.Error()
 	}
 	l.log("ERROR", message, fields, err)
+	telemetry.RecordLog(context.Background(), "error", message, fields)
 }
 
 // log writes a structured log entry
@@ -73,10 +78,10 @@ func (l *Logger) redactSensitiveData(fields map[string]interface{}) map[string]i
 	redacted := make(map[string]interface{})
 	for k, v := range fields {
 		keyLower := strings.ToLower(k)
-		
+
 		// Redact API keys
-		if strings.Contains(keyLower, "api_key") || strings.Contains(keyLower, "apikey") || 
-		   strings.Contains(keyLower, "token") || strings.Contains(keyLower, "secret") {
+		if strings.Contains(keyLower, "api_key") || strings.Contains(keyLower, "apikey") ||
+			strings.Contains(keyLower, "token") || strings.Contains(keyLower, "secret") {
 			redacted[k] = "[REDACTED]"
 			continue
 		}

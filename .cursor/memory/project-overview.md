@@ -26,6 +26,9 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 - `server/`: HTTP handlers and request processing
 - `types/`: Data structures for requests/responses
 
+### Observability
+- `telemetry/`: Configures the OTLP exporter that streams traces and logger events to whichever collector is pointed to by `OTLP_ENDPOINT`, `OTLP_API_KEY`, and related env vars.
+
 ### Data Flow
 1. Client sends request with specific model name
 2. Server extracts model and looks up matching route
@@ -45,3 +48,4 @@ Resolves "tools is incompatible with response_format" errors:
 - **Environment Variables**: All sensitive data via `${VAR_NAME}` syntax
 - **Systemd Service**: Managed deployment with automatic restarts
 - **SSH Deployment**: Remote deployment via install.sh script
+- **Observability**: Traces and structured logs flow through the env-driven OTLP exporter (see `telemetry/`), making them available in whichever backend `OTLP_ENDPOINT` targets.

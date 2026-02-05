@@ -35,6 +35,10 @@
   - **Multimodal content support**: Message.Content handles both string and array formats
   - Helper methods for content type detection and extraction
 
+### Telemetry (`telemetry/`)
+- **Purpose**: Initializes the OTLP exporter that sends traces and logger events to whichever collector `OTLP_*` env vars point to.
+- **Key Components**: Resource builders, trace provider setup, `RecordLog` helper, and wrapper tracer helpers used by `server` and `providers`.
+
 ## Data Flow: Request Processing
 
 ```mermaid

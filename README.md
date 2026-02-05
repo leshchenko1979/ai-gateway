@@ -121,6 +121,18 @@ sudo journalctl -u ai-gateway -f    # View logs
 - **Logging**: Structured JSON logs with request/response summaries, automatic key redaction
 - **Error Handling**: Sequential provider fallback on any error, detailed error messages with provider info
 
+## Telemetry
+
+The gateway can send OpenTelemetry traces and logger events directly to any OTLP-compliant collector. Configure the following environment variables to point at your observability backend (HTTPS/Grafana Cloud, Alloy, Tempo, or other OTLP destination):
+
+- `OTLP_ENDPOINT`: Full URL to the OTLP endpoint (`https://grpc.grafana.net`, `https://otel-collector.yourdomain`, etc.).
+- `OTLP_API_KEY`: API key or token. The binary automatically converts this value into a Basic auth header (`Authorization: Basic base64(apiKey:)`).
+- `OTLP_SERVICE_NAME` (optional): Override the default service name (`ai-gateway`) used to group spans/logs.
+- `OTLP_RESOURCE_ATTRIBUTES` (optional): Comma-separated `key=value` pairs added to each resource (e.g., `deployment.environment=production,service.namespace=api`).
+- `OTLP_HEADERS` (optional): Extra headers in `Key=Value` CSV format; useful for multi-tenant collectors.
+
+If both `OTLP_ENDPOINT` and `OTLP_API_KEY` are set, traces and the gateway’s structured log entries are exported to OTLP automatically. Use your collector’s UI (Tempo, Grafana Cloud, etc.) to verify spans, trace IDs, and emitted log events.
+
 ## Development
 
 ```bash
