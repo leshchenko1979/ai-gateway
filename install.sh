@@ -96,12 +96,17 @@ install_service() {
     sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR
     sudo chmod 755 $CONFIG_DIR
 
-    # Copy env file if provided
+    # Copy env file if provided (filter out deployment-specific variables)
     if [ -f ".env" ]; then
-        print_info "Copying .env file to $CONFIG_DIR"
-        sudo cp .env $CONFIG_DIR/.env
-        sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
-        sudo chmod 600 $CONFIG_DIR/.env
+        print_info "Copying filtered .env file to $CONFIG_DIR"
+        # Filter out SSH and deployment-specific variables, keep only runtime env vars
+        grep -E '^(OTLP_|SERVICE_|CONFIG_)' .env > /tmp/ai-gateway-runtime.env 2>/dev/null || true
+        if [ -s /tmp/ai-gateway-runtime.env ]; then
+            sudo cp /tmp/ai-gateway-runtime.env $CONFIG_DIR/.env
+            sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
+            sudo chmod 600 $CONFIG_DIR/.env
+        fi
+        rm -f /tmp/ai-gateway-runtime.env
     fi
 
     # Copy config file if it doesn't exist
@@ -204,6 +209,7 @@ scp_copy() {
 # Copy all deployment files to remote server via tar pipeline
 tar_copy() {
     local ssh_opts=""
+    local temp_files=()
 
     if [ -n "$SSH_KEY" ]; then
         ssh_opts="$ssh_opts -i $SSH_KEY"
@@ -216,10 +222,30 @@ tar_copy() {
     # Use optimized SSH options for large file transfers
     ssh_opts="$ssh_opts -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
 
+    # Handle .env file filtering for tar copy
+    local env_file=""
+    if [ -f ".env" ]; then
+        grep -E '^(OTLP_|SERVICE_|CONFIG_)' .env > /tmp/.env.filtered 2>/dev/null || true
+        if [ -s /tmp/.env.filtered ]; then
+            env_file="/tmp/.env.filtered"
+            temp_files+=("/tmp/.env.filtered")
+        fi
+    fi
+
     # Create tar archive with all needed files and stream to remote
     print_info "Creating deployment archive and streaming to remote server..."
-    tar czf - --format=ustar -C . "$BINARY_NAME" $( [ -f "ai-gateway.service" ] && echo "ai-gateway.service" ) $( [ -f "config.yaml" ] && echo "config.yaml" ) $( [ -f ".env" ] && echo ".env" ) 2>/dev/null | \
-    ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_TMP_DIR"
+    if [ -n "$env_file" ]; then
+        tar czf - --format=ustar -C . "$BINARY_NAME" $( [ -f "ai-gateway.service" ] && echo "ai-gateway.service" ) $( [ -f "config.yaml" ] && echo "config.yaml" ) -C /tmp .env.filtered 2>/dev/null | \
+        ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_TMP_DIR && mv $REMOTE_TMP_DIR/.env.filtered $REMOTE_TMP_DIR/.env"
+    else
+        tar czf - --format=ustar -C . "$BINARY_NAME" $( [ -f "ai-gateway.service" ] && echo "ai-gateway.service" ) $( [ -f "config.yaml" ] && echo "config.yaml" ) 2>/dev/null | \
+        ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_TMP_DIR"
+    fi
+
+    # Clean up temporary files
+    for temp_file in "${temp_files[@]}"; do
+        rm -f "$temp_file"
+    done
 }
 
 # Copy deployment artifacts using rsync when available for faster transfers
@@ -231,8 +257,16 @@ copy_payload_to_remote() {
     if [ -f "config.yaml" ]; then
         files+=("config.yaml")
     fi
+
+    # Filter .env file to remove deployment-specific variables before copying
     if [ -f ".env" ]; then
-        files+=(".env")
+        grep -E '^(OTLP_|SERVICE_|CONFIG_)' .env > /tmp/ai-gateway-deploy.env 2>/dev/null || true
+        if [ -s /tmp/ai-gateway-deploy.env ]; then
+            files+=("/tmp/ai-gateway-deploy.env")
+            # Rename the filtered file to .env for the remote copy
+            mv /tmp/ai-gateway-deploy.env /tmp/.env
+            files[${#files[@]}-1]="/tmp/.env"
+        fi
     fi
 
     if [ ${#files[@]} -eq 0 ]; then
@@ -255,9 +289,20 @@ copy_payload_to_remote() {
 
         local remote_dest="${SSH_USER}@${SSH_HOST}:${REMOTE_TMP_DIR}/"
         rsync -az --progress -e "$rsync_ssh" "${files[@]}" "$remote_dest"
+        # Clean up temporary file
+        rm -f /tmp/.env
     else
         print_info "rsync not available; falling back to tar-based streaming copy"
-        tar_copy
+        # For tar copy, we need to handle the filtered .env differently
+        if [ -f "/tmp/.env" ]; then
+            # Copy the filtered .env to the current directory temporarily
+            cp /tmp/.env .env.filtered
+            tar_copy
+            # Clean up
+            rm -f .env.filtered /tmp/.env
+        else
+            tar_copy
+        fi
     fi
 }
 
@@ -386,9 +431,14 @@ EOF
             chmod 600 $CONFIG_DIR/config.yaml
         fi
         if [ -f "$REMOTE_TMP_DIR/.env" ]; then
-            cp $REMOTE_TMP_DIR/.env $CONFIG_DIR/.env
-            chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
-            chmod 600 $CONFIG_DIR/.env
+            # Filter out SSH and deployment-specific variables, keep only runtime env vars
+            grep -E '^(OTLP_|SERVICE_|CONFIG_)' "$REMOTE_TMP_DIR/.env" > /tmp/ai-gateway-runtime.env 2>/dev/null || true
+            if [ -s /tmp/ai-gateway-runtime.env ]; then
+                cp /tmp/ai-gateway-runtime.env $CONFIG_DIR/.env
+                chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
+                chmod 600 $CONFIG_DIR/.env
+            fi
+            rm -f /tmp/ai-gateway-runtime.env
         fi
 
         # Reload systemd
