@@ -77,6 +77,7 @@ routes:
 **Environment Variables:**
 - `GATEWAY_API_KEY`: Required for authentication
 - Provider API keys: `${PROVIDER_NAME}_API_KEY`
+ - Missing `${VAR}` values cause startup errors with a clear list of missing vars
 
 **Security:** Files use 600 permissions, prefer env vars over hardcoded keys, runs as non-root user.
 

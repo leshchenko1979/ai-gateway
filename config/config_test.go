@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +48,38 @@ func TestLoadConfig(t *testing.T) {
 
 	if cfg.Routes[0].Name == "" {
 		t.Error("Route name is required")
+	}
+}
+
+func TestLoadConfigMissingEnvVar(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+	configData := `
+api_key: ${GATEWAY_API_KEY}
+providers:
+  - name: test
+    api_key: ${MISSING_PROVIDER_KEY}
+    base_url: https://example.com
+routes:
+  - name: test-route
+    steps:
+      - provider: test
+        model: test-model
+`
+	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	os.Setenv("GATEWAY_API_KEY", "test-gateway-key")
+	defer os.Unsetenv("GATEWAY_API_KEY")
+	os.Unsetenv("MISSING_PROVIDER_KEY")
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("expected error for missing environment variable, got nil")
+	}
+	if !strings.Contains(err.Error(), "MISSING_PROVIDER_KEY") {
+		t.Fatalf("expected missing env var name in error, got: %v", err)
 	}
 }
 

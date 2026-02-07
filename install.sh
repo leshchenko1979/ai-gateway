@@ -54,13 +54,13 @@ print_warning() {
 # Build the binary (local architecture)
 build() {
     print_info "Building $BINARY_NAME..."
-    go build -o $BINARY_NAME .
+    go build -ldflags="-s -w" -o $BINARY_NAME .
     print_info "Build complete!"
 }
 
 build_linux() {
     print_info "Building $BINARY_NAME for Linux x86_64..."
-    GOOS=linux GOARCH=amd64 go build -o $BINARY_NAME .
+    GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $BINARY_NAME .
     print_info "Linux build complete!"
 }
 

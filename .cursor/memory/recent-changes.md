@@ -1,5 +1,28 @@
 # Recent Changes
 
+## Config Env Var Fail-Fast Validation (2026-02-07)
+
+### Overview
+Added fail-fast validation for missing `${VAR}` references in `config.yaml`, so startup errors clearly list missing environment variables (especially API keys).
+
+### Changes Made
+1. **Env Var Validation**
+   - Added missing env var detection before YAML unmarshal
+   - Error lists all missing variable names in sorted order
+2. **Tests & Docs**
+   - Added config test for missing env var failure
+   - Documented fail-fast behavior in configuration docs
+
+### Files Modified
+- `config/config.go`: Missing env var detection during config load
+- `config/config_test.go`: Added missing env var test
+- `README.md`: Documented fail-fast behavior
+- `config.yaml.example`: Added fail-fast note
+
+### Impact
+- Clear startup errors when API keys or other env vars are missing
+- More predictable deployments with explicit configuration failures
+
 ## Multimodal Message Support: Enhanced Content Parsing (2026-02-04)
 
 ### Overview

@@ -1,4 +1,4 @@
-api_key: ${GATEWAY_API_KEY}
+api_key: ${GATEWAY_API_KEY} # Missing env vars fail fast at startup
 port: 8080
 default_timeout: 300s
 

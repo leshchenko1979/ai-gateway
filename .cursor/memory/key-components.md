@@ -69,7 +69,7 @@ graph TD
 
 ### Configuration Loading
 - File lookup: `./config.yaml` → `/etc/ai-gateway/config.yaml`
-- Environment variable expansion: `${VAR_NAME}` syntax
+- Environment variable expansion: `${VAR_NAME}` syntax with missing-var fail fast
 - Validation: Provider/route cross-references, timeout parsing
 
 ### Provider Communication

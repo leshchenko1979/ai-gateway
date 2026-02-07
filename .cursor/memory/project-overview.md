@@ -6,7 +6,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 ## Tech Stack
 - **Language**: Go 1.21+
 - **Architecture**: REST API gateway with route-based provider selection
-- **Configuration**: YAML-based with environment variable substitution
+- **Configuration**: YAML-based with environment variable substitution and fail-fast missing-var checks
 - **Deployment**: Systemd service with SSH-based deployment scripts
 - **Logging**: Structured JSON logging with API key redaction
 - **Security**: API key authentication, TLS support
@@ -45,7 +45,7 @@ Resolves "tools is incompatible with response_format" errors:
 
 ## Integration Points
 - **OpenAI-Compatible APIs**: Works with any provider supporting OpenAI API format
-- **Environment Variables**: All sensitive data via `${VAR_NAME}` syntax
+- **Environment Variables**: All sensitive data via `${VAR_NAME}` syntax; missing vars fail fast
 - **Systemd Service**: Managed deployment with automatic restarts
 - **SSH Deployment**: Remote deployment via install.sh script
 - **Observability**: Traces and structured logs flow through the env-driven OTLP exporter (see `telemetry/`), making them available in whichever backend `OTLP_ENDPOINT` targets.

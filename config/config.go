@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +36,10 @@ func LoadConfig(filename string) (*Config, error) {
 	}
 
 	// Expand environment variables
-	expanded := expandEnvVars(string(data))
+	expanded, err := expandEnvVars(string(data))
+	if err != nil {
+		return nil, err
+	}
 
 	var config Config
 	if err := yaml.Unmarshal([]byte(expanded), &config); err != nil {
@@ -67,10 +72,44 @@ func LoadConfig(filename string) (*Config, error) {
 }
 
 // expandEnvVars replaces ${VAR_NAME} with environment variable values
-func expandEnvVars(s string) string {
+func expandEnvVars(s string) (string, error) {
+	missing := findMissingEnvVars(s)
+	if len(missing) > 0 {
+		return "", fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
 	return os.Expand(s, func(key string) string {
 		return os.Getenv(key)
-	})
+	}), nil
+}
+
+func findMissingEnvVars(s string) []string {
+	re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	matches := re.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		name := match[1]
+		if os.Getenv(name) == "" {
+			seen[name] = struct{}{}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	missing := make([]string, 0, len(seen))
+	for name := range seen {
+		missing = append(missing, name)
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 // validateConfig checks that required fields are present
