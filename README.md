@@ -14,7 +14,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 - **Reliable**: Sequential provider fallback, automatic retry logic
 - **Simple**: Single binary deployment, YAML configuration
 - **Secure**: API key redaction, non-root execution, restrictive permissions
-- **Compatible**: Drop-in replacement for OpenAI API in tools like n8n
+- **Open-AI Compatible**: Drop-in replacement for OpenAI API in tools like n8n. Just change the API base and make sure the requested model name matches one of your configured routes.
 
 ## Installation
 
