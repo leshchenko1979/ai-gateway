@@ -139,16 +139,6 @@ The gateway can send OpenTelemetry traces and logger events directly to any OTLP
 ### How it works
 The gateway uses the **OTLP HTTP exporter** for maximum compatibility (bypassing gRPC/ALPN issues). It automatically handles the `/v1/traces` signal path, ensuring that if you provide a base URL (like Grafana's `/otlp`), it still reaches the correct endpoint.
 
-When you install via `./install.sh install-service`, the script copies `.env` into `/etc/ai-gateway/.env` and the generated systemd unit loads it via `EnvironmentFile`. After editing, run `sudo systemctl restart ai-gateway`.
-
-## Development
-
-```bash
-go test -v ./...           # Run tests
-go test -cover ./...       # Tests with coverage
-go build -o ai-gateway .   # Build manually
-./ai-gateway               # Run locally
-```
 
 ## License
 
