@@ -9,7 +9,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 **Daily Use Case**: The author connects to multiple AI providers with free tiers, automatically cycling between them when rate limits are hit - ensuring continuous service.
 
 ### Key Benefits
-- **Lightweight**: ~10MB binary with minimal memory footprint
+- **Lightweight**: ~20MB binary with minimal memory footprint
 - **Fast**: Compiled Go with efficient runtime, no JVM overhead
 - **Reliable**: Sequential provider fallback, automatic retry logic
 - **Simple**: Single binary deployment, YAML configuration
@@ -43,8 +43,24 @@ SSH_HOST=your-server.com ./install.sh deploy
 ### Deployment Options
 
 - **Local**: `build` → `install-service` for development/production on same machine
-- **Remote**: `deploy` handles SSH upload, remote installation, and service setup
+- **Remote (systemd)**: `deploy` handles SSH upload, remote installation, and systemd service setup
+- **Remote (Docker)**: `deploy-docker` builds and deploys as a container behind Traefik
 - **Binary-only**: `install` for basic binary installation without systemd service
+
+### Docker Installation
+
+Deploy as a container behind Traefik (or any reverse proxy) for HTTPS termination:
+
+1. **Prerequisites**: Docker on the remote server; Traefik with `traefik-public` network
+2. **Configure**: Ensure `config.yaml` and `.env` exist with your API keys (GATEWAY_API_KEY, provider keys)
+3. **Deploy**:
+   ```bash
+   cp .env.example .env   # if needed
+   # Edit .env with SSH_HOST, SSH_USER, DOMAIN, and runtime vars (GATEWAY_API_KEY, etc.)
+   ./install.sh deploy-docker
+   ```
+4. **Domain**: Set `DOMAIN` in `.env` (e.g. `DOMAIN=ai-gateway.example.com`). docker-compose uses it for the Traefik Host rule.
+5. **n8n integration**: Set Base URL to `https://ai-gateway.redevest.ru/v1`, Model to a route name (e.g. `dynamic/n8n`), API Key to your `GATEWAY_API_KEY` value.
 
 ## Configuration
 
@@ -127,7 +143,7 @@ sudo journalctl -u ai-gateway -f    # View logs
 The gateway can send OpenTelemetry traces and logger events directly to any OTLP/HTTP-compliant collector. Configure the following environment variables to point at your observability backend (Grafana Cloud, Alloy, Tempo, or other OTLP destination):
 
 - `OTLP_ENDPOINT`: Full URL to the OTLP HTTP endpoint. Supports both `host:port` and full URLs like `https://otlp-gateway.example.com/otlp`.
-- `OTLP_API_KEY`: API key or token. 
+- `OTLP_API_KEY`: API key or token.
     - For **Grafana Cloud**: You can use a standard `glc_` Access Policy Token. The gateway automatically extracts the Instance ID from the token and handles the required Basic authentication (`instanceID:apiKey`).
     - For other collectors: It uses the provided key for Basic authentication (`apiKey:`).
 - `OTEL_SERVICE_NAME` (or `OTLP_SERVICE_NAME`): The service name (`ai-gateway`) used to group spans/logs.

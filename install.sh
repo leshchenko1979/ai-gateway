@@ -28,6 +28,7 @@ SSH_USER="${SSH_USER:-root}"
 SSH_KEY="${SSH_KEY:-}"
 SSH_PORT="${SSH_PORT:-22}"
 REMOTE_TMP_DIR="/tmp/ai-gateway-install"
+REMOTE_DOCKER_DIR="/root/services/ai-gateway"
 
 # Functions
 print_info() {
@@ -100,7 +101,7 @@ install_service() {
     if [ -f ".env" ]; then
         print_info "Copying filtered .env file to $CONFIG_DIR"
         # Filter out SSH and deployment-specific variables, keep only runtime env vars
-        grep -E '^(OTLP_|SERVICE_|CONFIG_)' .env > /tmp/ai-gateway-runtime.env 2>/dev/null || true
+        grep -vE '^(SSH_HOST|SSH_USER|SSH_KEY|SSH_PORT)=' .env > /tmp/ai-gateway-runtime.env 2>/dev/null || true
         if [ -s /tmp/ai-gateway-runtime.env ]; then
             sudo cp /tmp/ai-gateway-runtime.env $CONFIG_DIR/.env
             sudo chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
@@ -225,7 +226,7 @@ tar_copy() {
     # Handle .env file filtering for tar copy
     local env_file=""
     if [ -f ".env" ]; then
-        grep -E '^(OTLP_|SERVICE_|CONFIG_)' .env > /tmp/.env.filtered 2>/dev/null || true
+        grep -vE '^(SSH_HOST|SSH_USER|SSH_KEY|SSH_PORT)=' .env > /tmp/.env.filtered 2>/dev/null || true
         if [ -s /tmp/.env.filtered ]; then
             env_file="/tmp/.env.filtered"
             temp_files+=("/tmp/.env.filtered")
@@ -260,7 +261,7 @@ copy_payload_to_remote() {
 
     # Filter .env file to remove deployment-specific variables before copying
     if [ -f ".env" ]; then
-        grep -E '^(OTLP_|SERVICE_|CONFIG_)' .env > /tmp/ai-gateway-deploy.env 2>/dev/null || true
+        grep -vE '^(SSH_HOST|SSH_USER|SSH_KEY|SSH_PORT)=' .env > /tmp/ai-gateway-deploy.env 2>/dev/null || true
         if [ -s /tmp/ai-gateway-deploy.env ]; then
             files+=("/tmp/ai-gateway-deploy.env")
             # Rename the filtered file to .env for the remote copy
@@ -432,7 +433,7 @@ EOF
         fi
         if [ -f "$REMOTE_TMP_DIR/.env" ]; then
             # Filter out SSH and deployment-specific variables, keep only runtime env vars
-            grep -E '^(OTLP_|SERVICE_|CONFIG_)' "$REMOTE_TMP_DIR/.env" > /tmp/ai-gateway-runtime.env 2>/dev/null || true
+            grep -vE '^(SSH_HOST|SSH_USER|SSH_KEY|SSH_PORT)=' "$REMOTE_TMP_DIR/.env" > /tmp/ai-gateway-runtime.env 2>/dev/null || true
             if [ -s /tmp/ai-gateway-runtime.env ]; then
                 cp /tmp/ai-gateway-runtime.env $CONFIG_DIR/.env
                 chown $SERVICE_USER:$SERVICE_USER $CONFIG_DIR/.env
@@ -462,19 +463,104 @@ REMOTE_INSTALL
     print_info "Service is running on ${SSH_HOST}"
 }
 
+# Deploy to remote server as Docker container
+deploy_docker() {
+    if [ -z "$SSH_HOST" ]; then
+        print_error "SSH_HOST is not set. Set it via environment variable: SSH_HOST=example.com"
+        exit 1
+    fi
 
+    if [ ! -f "config.yaml" ]; then
+        print_error "config.yaml not found. Create it from config.yaml.example and add your API keys."
+        exit 1
+    fi
+
+    print_info "Deploying to remote server as Docker container: ${SSH_USER}@${SSH_HOST}"
+
+    # Create remote directory
+    print_info "Creating remote directory $REMOTE_DOCKER_DIR..."
+    ssh_exec "mkdir -p $REMOTE_DOCKER_DIR"
+
+    # Prepare filtered .env for runtime (exclude SSH vars)
+    local env_filtered=""
+    if [ -f ".env" ]; then
+        grep -vE '^(SSH_HOST|SSH_USER|SSH_KEY|SSH_PORT)=' .env > /tmp/ai-gateway-docker.env 2>/dev/null || true
+        if [ -s /tmp/ai-gateway-docker.env ]; then
+            env_filtered="/tmp/ai-gateway-docker.env"
+        fi
+    fi
+    if [ -z "$env_filtered" ]; then
+        print_warning "No .env or no runtime vars found. Container may fail without GATEWAY_API_KEY and provider keys."
+    fi
+
+    # Build tarball: source files, Dockerfile, docker-compose, config, filtered .env (exclude .git, binary)
+    print_info "Creating deployment archive..."
+    local ssh_opts=""
+    [ -n "$SSH_KEY" ] && ssh_opts="$ssh_opts -i $SSH_KEY"
+    [ -n "$SSH_PORT" ] && ssh_opts="$ssh_opts -p $SSH_PORT"
+    ssh_opts="$ssh_opts -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+
+    if [ -n "$env_filtered" ]; then
+        cp "$env_filtered" /tmp/.env.docker
+        tar czf - --format=ustar \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='ai-gateway' \
+            --exclude='ai-gateway-linux' \
+            --exclude='*.test' \
+            -C . . \
+            -C /tmp .env.docker 2>/dev/null | \
+        ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_DOCKER_DIR && mv $REMOTE_DOCKER_DIR/.env.docker $REMOTE_DOCKER_DIR/.env"
+        rm -f /tmp/ai-gateway-docker.env /tmp/.env.docker
+    else
+        tar czf - --format=ustar \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='ai-gateway' \
+            --exclude='ai-gateway-linux' \
+            --exclude='*.test' \
+            -C . . 2>/dev/null | \
+        ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_DOCKER_DIR"
+        rm -f /tmp/ai-gateway-docker.env
+    fi
+
+    # Build and start on remote
+    print_info "Building Docker image and starting container on remote..."
+    ssh_exec "cd $REMOTE_DOCKER_DIR && docker compose build --no-cache && docker compose up -d"
+
+    # Wait for container to be running
+    print_info "Waiting for container to start..."
+    local max_wait=90
+    local wait_time=0
+    local increment=5
+    while [ $wait_time -lt $max_wait ]; do
+        if ssh_exec "docker ps --filter name=ai-gateway --format '{{.Status}}' | grep -q 'Up'" 2>/dev/null; then
+            print_info "Container is running"
+            break
+        fi
+        echo "  Waiting... ($wait_time/$max_wait s)"
+        sleep $increment
+        wait_time=$((wait_time + increment))
+    done
+
+    if [ $wait_time -ge $max_wait ]; then
+        print_warning "Container may not have started. Check: ssh ${SSH_USER}@${SSH_HOST} 'docker logs ai-gateway'"
+    fi
+    print_info "Deployment complete! AI Gateway should be available at https://ai-gateway.redevest.ru (ensure DNS and Traefik are configured)"
+}
 
 # Show usage
 usage() {
-    echo "Usage: $0 {build|install|install-service|deploy}"
+    echo "Usage: $0 {build|install|install-service|deploy|deploy-docker}"
     echo ""
     echo "Commands:"
     echo "  build           - Build the binary locally"
     echo "  install         - Install the binary to $INSTALL_DIR (local)"
     echo "  install-service - Install binary and systemd service (local)"
-    echo "  deploy          - Build and deploy to remote server via SSH"
+    echo "  deploy          - Build and deploy to remote server as systemd service"
+    echo "  deploy-docker   - Build and deploy to remote server as Docker container"
     echo ""
-    echo "Remote Deployment (for 'deploy' command):"
+    echo "Remote Deployment (for 'deploy' and 'deploy-docker'):"
     echo "  SSH_HOST        - Remote server hostname or IP (required)"
     echo "  SSH_USER        - SSH user (default: root)"
     echo "  SSH_KEY         - Path to SSH private key (optional)"
@@ -498,6 +584,9 @@ case "$1" in
         ;;
     deploy)
         deploy
+        ;;
+    deploy-docker)
+        deploy_docker
         ;;
     *)
         usage

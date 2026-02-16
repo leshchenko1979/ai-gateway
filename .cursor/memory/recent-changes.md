@@ -1,5 +1,33 @@
 # Recent Changes
 
+## Docker Deployment & DOMAIN Configuration (2026-02-16)
+
+### Overview
+Added Docker-based deployment option and made Traefik domain configurable via `.env`.
+
+### Changes Made
+1. **Docker Setup**
+   - Added `Dockerfile`, `docker-compose.yml`, `.dockerignore`
+   - `deploy-docker` in `install.sh`: tars source, Dockerfile, config, filtered .env; SSHs to remote and runs `docker compose build && docker compose up -d`
+   - VSCode task `deploy-docker` in `.vscode/tasks.json`
+
+2. **DOMAIN from .env**
+   - Traefik Host rule uses `${DOMAIN:-ai-gateway.redevest.ru}` in docker-compose
+   - Added `DOMAIN` to `.env.example` and documented in README
+
+### Files Modified
+- `install.sh`: `deploy-docker` command
+- `docker-compose.yml`: `Host(\`${DOMAIN:-...}\`)` for Traefik
+- `.env.example`: `DOMAIN` variable
+- `README.md`: Docker Installation section updated for DOMAIN
+- `.vscode/tasks.json`: `deploy-docker` task
+
+### Untracked (new)
+- `Dockerfile`, `docker-compose.yml`, `.dockerignore`
+
+### Git Status Note
+Branch diverged from origin (1 local, 3 remote). Modified: .env.example, README.md, install.sh. Untracked: .dockerignore, Dockerfile, docker-compose.yml.
+
 ## Config Env Var Fail-Fast Validation (2026-02-07)
 
 ### Overview
@@ -152,14 +180,12 @@ Complete architectural refactoring from provider-centric to route-based configur
 - Added tests for route lookup and step execution
 
 ## Ongoing Work
-- Monitor for any edge cases in production deployment
-- Consider adding route pattern matching (prefix/wildcard) if needed
-- Evaluate adding route metrics and monitoring
+- Docker deployment files (.dockerignore, Dockerfile, docker-compose.yml) not yet committed
+- Branch diverged from origin/main (consider pull/rebase)
+- Monitor for edge cases in Docker production deployment
 
 ## Blockers
-- None identified - refactoring completed successfully
-- All tests passing
-- Configuration migration completed
+- None
 
 ## Observability: Generic OTLP telemetry (2026-02-05)
 

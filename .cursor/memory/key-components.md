@@ -106,8 +106,13 @@ graph TD
 - Log management: journalctl integration
 - Auto-restart: Service failure recovery
 
-### SSH Deployment
+### SSH Deployment (systemd)
 - Script: `install.sh deploy`
 - Remote operations: Binary copy, config deployment
 - Service management: Stop/start/restart cycle
-- Rollback capability: Previous version preservation
+
+### Docker Deployment
+- Script: `install.sh deploy-docker`
+- Files: `Dockerfile`, `docker-compose.yml`, `.dockerignore`
+- Traefik: Host rule uses `DOMAIN` from `.env`
+- VSCode task: `deploy-docker` in `.vscode/tasks.json`

@@ -1,0 +1,9 @@
+# Exclude from Docker build context
+.git
+.gitignore
+*.md
+.env
+ai-gateway
+ai-gateway-linux
+*.test
+.build_cache

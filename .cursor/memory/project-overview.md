@@ -7,7 +7,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 - **Language**: Go 1.21+
 - **Architecture**: REST API gateway with route-based provider selection
 - **Configuration**: YAML-based with environment variable substitution and fail-fast missing-var checks
-- **Deployment**: Systemd service with SSH-based deployment scripts
+- **Deployment**: Systemd service or Docker; SSH-based `install.sh` supports both `deploy` (systemd) and `deploy-docker` (Docker + Traefik)
 - **Logging**: Structured JSON logging with API key redaction
 - **Security**: API key authentication, TLS support
 

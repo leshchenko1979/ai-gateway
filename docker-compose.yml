@@ -1,0 +1,31 @@
+services:
+  ai-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-gateway
+    restart: always
+    env_file: .env
+    networks:
+      - traefik-public
+    expose:
+      - "8080"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ai-gateway.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.ai-gateway.entrypoints=websecure"
+      - "traefik.http.routers.ai-gateway.tls.certResolver=le"
+      - "traefik.http.services.ai-gateway.loadbalancer.server.port=8080"
+    # No container healthcheck - distroless has no wget/curl. Deploy script verifies via external curl.
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+        reservations:
+          memory: 32M
+          cpus: "0.1"
+
+networks:
+  traefik-public:
+    external: true
