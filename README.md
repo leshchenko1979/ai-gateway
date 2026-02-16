@@ -6,7 +6,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 
 **Born from Frustration**: Created when Cloudflare AI Gateway unexpectedly started disconnecting users without explanation. This self-hosted alternative gives you full control with no vendor lock-in.
 
-**Daily Use Case**: The author connects to multiple AI providers with free tiers, automatically cycling between them when rate limits are hit - ensuring continuous service.
+**Daily Use Case**: Connects to multiple AI providers with free tiers, automatically cycling between them when rate limits are hit - ensuring continuous service.
 
 ### Key Benefits
 - **Lightweight**: ~20MB binary with minimal memory footprint
@@ -14,7 +14,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 - **Reliable**: Sequential provider fallback, automatic retry logic
 - **Simple**: Single binary deployment, YAML configuration
 - **Secure**: API key redaction, non-root execution, restrictive permissions
-- **Compatible**: Drop-in replacement for OpenAI API in tools like n8n
+- **Open-AI Compatible**: Drop-in replacement for OpenAI API in tools like n8n. Just change the API base and make sure the requested model name matches one of your configured routes.
 
 ## Installation
 
@@ -24,6 +24,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 ```bash
 cp config.yaml.example config.yaml
 # Edit config.yaml with your API keys
+# See Configuration below
 ```
 
 2. **Deploy locally:**
@@ -36,7 +37,7 @@ sudo systemctl start ai-gateway      # Start service
 3. **Or deploy remotely:**
 ```bash
 cp .env.example .env                  # Configure SSH credentials
-# Edit .env with your server details
+# Edit .env with your server details or put them into the command string
 SSH_HOST=your-server.com ./install.sh deploy
 ```
 
@@ -46,6 +47,8 @@ SSH_HOST=your-server.com ./install.sh deploy
 - **Remote (systemd)**: `deploy` handles SSH upload, remote installation, and systemd service setup
 - **Remote (Docker)**: `deploy-docker` builds and deploys as a container behind Traefik
 - **Binary-only**: `install` for basic binary installation without systemd service
+
+For systemd deployments, use a reverse proxy like `nginx` or `traefik` to set up TLS termination and secure the traffic to your gateway.
 
 ### Docker Installation
 
@@ -75,6 +78,9 @@ providers:
   - name: cerebras
     api_key: ${CEREBRAS_API_KEY}
     base_url: https://api.cerebras.ai/v1
+  - name: openrouter
+    api_key: ${OPENROUTER_API_KEY}
+    base_url: https://openrouter.ai/api/v1
 
 routes:
   - name: dynamic/n8n  # Exact model name match required
@@ -86,6 +92,8 @@ routes:
         model: nvidia/nemotron-3-nano-30b-a3b:free
 ```
 
+You can put your API keys into `config.yaml` directly, but for security purposes it's better to store them in env vars and use them in `config.yaml`.
+
 **Configuration Locations:**
 1. `./config.yaml` (current directory)
 2. `/etc/ai-gateway/config.yaml` (system location)
@@ -95,9 +103,13 @@ routes:
 - Provider API keys: `${PROVIDER_NAME}_API_KEY`
  - Missing `${VAR}` values cause startup errors with a clear list of missing vars
 
-**Security:** Files use 600 permissions, prefer env vars over hardcoded keys, runs as non-root user.
 
 ## API Endpoints
+
+### Authentication
+All endpoints except for `/health` require authentication.
+
+Use `X-Api-Key` header or `Authorization: Bearer <token>` against configured gateway API key.
 
 ### Health Check
 ```bash
@@ -115,13 +127,9 @@ Returns available route names from the configuration, which serve as the model n
 ### Chat Completions
 ```bash
 POST /v1/chat/completions
-Headers: X-Api-Key: <gateway-api-key>
-Content-Type: application/json
+Headers: X-Api-Key: <gateway-api-key> OR Authorization: Bearer <token>
 ```
-Routes requests to providers based on exact model name matching, with automatic fallback and conflict resolution.
-
-## Authentication
-Supports `X-Api-Key` header or `Authorization: Bearer <token>` against configured gateway API key.
+Routes requests to providers. Set model to the desired route name.
 
 ## Service Management
 ```bash
@@ -146,23 +154,13 @@ The gateway can send OpenTelemetry traces and logger events directly to any OTLP
 - `OTLP_API_KEY`: API key or token.
     - For **Grafana Cloud**: You can use a standard `glc_` Access Policy Token. The gateway automatically extracts the Instance ID from the token and handles the required Basic authentication (`instanceID:apiKey`).
     - For other collectors: It uses the provided key for Basic authentication (`apiKey:`).
-- `OTEL_SERVICE_NAME` (or `OTLP_SERVICE_NAME`): The service name (`ai-gateway`) used to group spans/logs.
-- `OTEL_RESOURCE_ATTRIBUTES` (or `OTLP_RESOURCE_ATTRIBUTES`): Comma-separated `key=value` pairs added to each resource (e.g., `deployment.environment=production`).
-- `OTLP_HEADERS` (optional): Extra headers in `Key=Value` CSV format.
+- `OTEL_SERVICE_NAME` (or `OTLP_SERVICE_NAME`): Optional. The service name (`ai-gateway`) used to group spans/logs.
+- `OTEL_RESOURCE_ATTRIBUTES` (or `OTLP_RESOURCE_ATTRIBUTES`): Optional. Comma-separated `key=value` pairs added to each resource (e.g., `deployment.environment=production`).
+- `OTLP_HEADERS` (optional): Optional. Extra headers in `Key=Value` CSV format.
 
 ### How it works
 The gateway uses the **OTLP HTTP exporter** for maximum compatibility (bypassing gRPC/ALPN issues). It automatically handles the `/v1/traces` signal path, ensuring that if you provide a base URL (like Grafana's `/otlp`), it still reaches the correct endpoint.
 
-When you install via `./install.sh install-service`, the script copies `.env` into `/etc/ai-gateway/.env` and the generated systemd unit loads it via `EnvironmentFile`. After editing, run `sudo systemctl restart ai-gateway`.
-
-## Development
-
-```bash
-go test -v ./...           # Run tests
-go test -cover ./...       # Tests with coverage
-go build -o ai-gateway .   # Build manually
-./ai-gateway               # Run locally
-```
 
 ## License
 
