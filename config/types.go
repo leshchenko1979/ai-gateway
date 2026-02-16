@@ -11,6 +11,7 @@ type Config struct {
 	DefaultTimeout string     `yaml:"default_timeout"`
 	Providers      []Provider `yaml:"providers"`
 	Routes         []Route    `yaml:"routes"`
+	EnvVars        []string   `yaml:"-"`
 }
 
 // Provider represents a single AI provider configuration

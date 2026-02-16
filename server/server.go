@@ -79,8 +79,17 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 // Start starts the HTTPS server
 func (s *Server) Start() error {
 	s.logger.Info("Starting server", map[string]interface{}{
-		"port":      s.config.Port,
-		"providers": len(s.config.Providers),
+		"port":       s.config.Port,
+		"providers":  len(s.config.Providers),
+		"routes":     len(s.config.Routes),
+		"route_names": func(routes []config.Route) []string {
+			names := make([]string, 0, len(routes))
+			for _, route := range routes {
+				names = append(names, route.Name)
+			}
+			return names
+		}(s.config.Routes),
+		"env_vars": s.config.EnvVars,
 	})
 
 	// For now, start HTTP server. In production, this should be HTTPS

@@ -35,8 +35,11 @@ func LoadConfig(filename string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file from any location: %w", err)
 	}
 
+	rawConfig := string(data)
+	envVars := findEnvVars(rawConfig)
+
 	// Expand environment variables
-	expanded, err := expandEnvVars(string(data))
+	expanded, err := expandEnvVars(rawConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +70,8 @@ func LoadConfig(filename string) (*Config, error) {
 	if err := validateConfig(&config); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
+
+	config.EnvVars = envVars
 
 	return &config, nil
 }
@@ -110,6 +115,33 @@ func findMissingEnvVars(s string) []string {
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+func findEnvVars(s string) []string {
+	re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	matches := re.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		seen[match[1]] = struct{}{}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	vars := make([]string, 0, len(seen))
+	for name := range seen {
+		vars = append(vars, name)
+	}
+	sort.Strings(vars)
+	return vars
 }
 
 // validateConfig checks that required fields are present

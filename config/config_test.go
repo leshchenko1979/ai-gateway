@@ -83,6 +83,29 @@ routes:
 	}
 }
 
+func TestFindEnvVars(t *testing.T) {
+	configData := `
+api_key: ${GATEWAY_API_KEY}
+providers:
+  - name: test
+    api_key: ${PROVIDER_API_KEY}
+    base_url: https://example.com
+routes:
+  - name: test-route
+    steps:
+      - provider: test
+        model: test-model
+`
+
+	vars := findEnvVars(configData)
+	if len(vars) != 2 {
+		t.Fatalf("expected 2 env vars, got %d", len(vars))
+	}
+	if vars[0] != "GATEWAY_API_KEY" || vars[1] != "PROVIDER_API_KEY" {
+		t.Fatalf("unexpected env vars: %v", vars)
+	}
+}
+
 func TestGetTimeout(t *testing.T) {
 	// Test step timeout provided
 	timeout := GetTimeout("30s", "60s")
