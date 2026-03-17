@@ -22,11 +22,12 @@ SERVICE_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/ai-gateway"
 SERVICE_USER="ai-gateway"
 
-# SSH Configuration (can be overridden via environment variables)
+# Remote deployment (from .env; can be overridden via environment variables)
 SSH_HOST="${SSH_HOST:-}"
 SSH_USER="${SSH_USER:-root}"
 SSH_KEY="${SSH_KEY:-}"
 SSH_PORT="${SSH_PORT:-22}"
+DOMAIN="${DOMAIN:-}"
 REMOTE_TMP_DIR="/tmp/ai-gateway-install"
 REMOTE_DOCKER_DIR="/root/services/ai-gateway"
 
@@ -55,13 +56,13 @@ print_warning() {
 # Build the binary (local architecture)
 build() {
     print_info "Building $BINARY_NAME..."
-    go build -ldflags="-s -w" -o $BINARY_NAME .
+    (cd app && go build -ldflags="-s -w" -o ../$BINARY_NAME .)
     print_info "Build complete!"
 }
 
 build_linux() {
     print_info "Building $BINARY_NAME for Linux x86_64..."
-    GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $BINARY_NAME .
+    (cd app && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../$BINARY_NAME .)
     print_info "Linux build complete!"
 }
 
@@ -330,7 +331,7 @@ remove_old_service() {
 # Deploy to remote server
 deploy() {
     if [ -z "$SSH_HOST" ]; then
-        print_error "SSH_HOST is not set. Set it via environment variable: SSH_HOST=example.com"
+        print_error "SSH_HOST is not set. Set it in .env or as environment variable"
         exit 1
     fi
 
@@ -466,7 +467,7 @@ REMOTE_INSTALL
 # Deploy to remote server as Docker container
 deploy_docker() {
     if [ -z "$SSH_HOST" ]; then
-        print_error "SSH_HOST is not set. Set it via environment variable: SSH_HOST=example.com"
+        print_error "SSH_HOST is not set. Set it in .env or as environment variable"
         exit 1
     fi
 
@@ -526,7 +527,7 @@ deploy_docker() {
 
     # Build and start on remote
     print_info "Building Docker image and starting container on remote..."
-    ssh_exec "cd $REMOTE_DOCKER_DIR && docker compose build --no-cache && docker compose up -d"
+    ssh_exec "cd $REMOTE_DOCKER_DIR && docker compose build && docker compose up -d"
 
     # Wait for container to be running
     print_info "Waiting for container to start..."
@@ -546,7 +547,11 @@ deploy_docker() {
     if [ $wait_time -ge $max_wait ]; then
         print_warning "Container may not have started. Check: ssh ${SSH_USER}@${SSH_HOST} 'docker logs ai-gateway'"
     fi
-    print_info "Deployment complete! AI Gateway should be available at https://ai-gateway.redevest.ru (ensure DNS and Traefik are configured)"
+    if [ -n "$DOMAIN" ]; then
+        print_info "Deployment complete! AI Gateway should be available at https://${DOMAIN} (ensure DNS and Traefik are configured)"
+    else
+        print_info "Deployment complete! Set DOMAIN in .env for Traefik. Ensure DNS and Traefik are configured."
+    fi
 }
 
 # Show usage
@@ -561,13 +566,8 @@ usage() {
     echo "  deploy-docker   - Build and deploy to remote server as Docker container"
     echo ""
     echo "Remote Deployment (for 'deploy' and 'deploy-docker'):"
-    echo "  SSH_HOST        - Remote server hostname or IP (required)"
-    echo "  SSH_USER        - SSH user (default: root)"
-    echo "  SSH_KEY         - Path to SSH private key (optional)"
-    echo "  SSH_PORT        - SSH port (default: 22)"
-    echo ""
-    echo "Example:"
-    echo "  SSH_HOST=example.com SSH_USER=deploy ./install.sh deploy"
+    echo "  Set in .env: SSH_HOST, SSH_USER, DOMAIN (and optionally SSH_KEY, SSH_PORT)"
+    echo "  Or override: SSH_HOST=host SSH_USER=deploy ./install.sh deploy"
     exit 1
 }
 

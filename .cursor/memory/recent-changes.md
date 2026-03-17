@@ -1,5 +1,51 @@
 # Recent Changes
 
+## Code Restructure: All Source in app/ (2026-03-17)
+
+### Overview
+Moved all Go source code into a single `app/` folder for simpler Docker builds and cleaner separation from config.
+
+### Changes Made
+1. **Layout**
+   - `app/` now contains: go.mod, go.sum, main.go, config/, server/, providers/, logger/, telemetry/, types/, test/
+   - `config.yaml` stays at project root (excluded from build; copied as last layer in Docker)
+2. **Dockerfile**
+   - Builder: `COPY app/ ./` — one copy for all code; config excluded
+   - Final stage: `COPY config.yaml .` from context as last layer
+3. **install.sh**
+   - `build` and `build_linux`: `cd app && go build -o ../$BINARY_NAME .`
+
+### Result
+- Single `COPY app/` in Dockerfile
+- Config-only changes: fast rebuild (builder cached)
+- config.yaml remains at root
+
+### Files Modified
+- `Dockerfile`
+- `install.sh`
+- Created `app/test/config.yaml` for config tests
+
+## Config-only Docker Deploy – Hybrid (2026-03-17)
+
+### Overview
+Reordered Dockerfile layers and removed `--no-cache` so config-only changes trigger a fast rebuild (seconds) instead of a full Go build.
+
+### Changes Made
+1. **Dockerfile**
+   - Builder stage: Replaced `COPY . .` with explicit copy so `config.yaml` is excluded from the build (later simplified to `COPY app/` with code in app/)
+   - Final stage: `COPY config.yaml .` from build context (not from builder) as the last layer
+2. **install.sh**
+   - Removed `--no-cache` from `deploy-docker` so Docker reuses layer cache when context is unchanged
+
+### Result
+- Config change: builder cached, rebuild in seconds
+- Code change: full rebuild
+- No change: fully cached, no rebuild
+
+### Files Modified
+- `Dockerfile`
+- `install.sh`
+
 ## Docker Deployment & DOMAIN Configuration (2026-02-16)
 
 ### Overview
@@ -133,7 +179,7 @@ Complete architectural refactoring from provider-centric to route-based configur
      - name: provider1
        api_key: key
        base_url: url
-   
+
    routes:
      - name: dynamic/n8n  # exact match required
        steps:
