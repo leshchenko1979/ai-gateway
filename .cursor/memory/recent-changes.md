@@ -1,5 +1,19 @@
 # Recent Changes
 
+## Upstream models diagnostics HTTP endpoint (2026-03-24)
+
+- `GET /v1/diagnostics/upstream-models` (no auth): parallel checks of each provider’s `GET {base_url}/models`; JSON `ok` + per-provider results; **503** if any provider fails, **200** if all succeed.
+- Shared logic in `providers/model_check.go`; CLI `cmd/check-models` calls the same helper.
+- Task **Query deployed upstream models check** runs `scripts/query-deployed-upstream-models.sh` (uses `DOMAIN` from `.env`, `curl` + `python3 -m json.tool`) so VS Code does not strip `$DOMAIN` from inline task commands.
+
+## Provider upstream model list check (2026-03-24)
+
+### Overview
+Added `app/cmd/check-models` CLI: loads `config.yaml` (same env substitution as the gateway), `GET`s OpenAI-style `{base_url}/models` per provider with Bearer auth, prints OK/model count or errors, exits 1 on any failure. VS Code/Cursor task **Verify provider model lists** in `.vscode/tasks.json` runs it with `cwd` `app/` and `envFile` `.env`.
+
+### Files
+- `app/cmd/check-models/main.go`, `.vscode/tasks.json`
+
 ## Code Restructure: All Source in app/ (2026-03-17)
 
 ### Overview

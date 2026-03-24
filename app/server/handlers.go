@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"ai-gateway/providers"
 	"ai-gateway/types"
 )
 
@@ -46,6 +47,38 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleUpstreamModelsCheck runs GET {base_url}/models against each configured provider (parallel).
+func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	results := providers.CheckUpstreamModels(r.Context(), s.config.Providers)
+	allOK := true
+	for i := range results {
+		if !results[i].OK {
+			allOK = false
+			break
+		}
+	}
+
+	status := http.StatusOK
+	if !allOK {
+		status = http.StatusServiceUnavailable
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		OK        bool                                 `json:"ok"`
+		Providers []providers.UpstreamModelCheckResult `json:"providers"`
+	}{
+		OK:        allOK,
+		Providers: results,
+	})
 }
 
 // writeErrorResponse writes a unified error response

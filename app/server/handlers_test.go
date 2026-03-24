@@ -34,6 +34,52 @@ func TestHandleHealth(t *testing.T) {
 	}
 }
 
+func TestHandleUpstreamModelsCheck(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"x","object":"model"}]}`))
+	}))
+	defer ts.Close()
+
+	providersList := []config.Provider{
+		{Name: "p1", APIKey: "secret", BaseURL: ts.URL + "/v1"},
+	}
+	cfg := &config.Config{APIKey: "test-key", Port: 8080, Providers: providersList}
+	logger := logger.NewLogger()
+	manager := providers.NewManager(providersList, []config.Route{}, logger)
+	srv := NewServer(cfg, logger, manager)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/diagnostics/upstream-models", nil)
+	rr := httptest.NewRecorder()
+	srv.handleUpstreamModelsCheck(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		OK        bool `json:"ok"`
+		Providers []struct {
+			Provider       string `json:"provider"`
+			OK             bool   `json:"ok"`
+			ModelCount     int    `json:"model_count"`
+			ResponseTimeMs int64  `json:"response_time_ms"`
+		} `json:"providers"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.OK || len(body.Providers) != 1 || !body.Providers[0].OK || body.Providers[0].ModelCount != 1 {
+		t.Fatalf("%+v", body)
+	}
+	if body.Providers[0].ResponseTimeMs < 0 {
+		t.Fatalf("response_time_ms: %d", body.Providers[0].ResponseTimeMs)
+	}
+}
+
 func TestHandleModels(t *testing.T) {
 	routes := []config.Route{
 		{Name: "test-route-1"},

@@ -9,6 +9,7 @@
   - `LoadConfig()`: Loads and validates configuration
   - `GetTimeout()`: Resolves timeout from step or default
   - Route/provider validation with cross-reference checking
+- **Ops**: Task **Verify provider model lists** runs `go run ./cmd/check-models` from `app/` (see `.vscode/tasks.json`) to confirm each provider’s upstream `/models` endpoint.
 
 ### Provider Management (`providers/`)
 - **`manager.go`**: Route-based provider execution
@@ -23,6 +24,7 @@
 - **`server.go`**: Server setup and routing
 - **Key Functions**:
   - `handleChatCompletions()`: Main request processing
+  - `handleUpstreamModelsCheck()`: `GET /v1/diagnostics/upstream-models` — unauthenticated; validates each provider’s upstream models API (same as CLI check)
   - Route lookup and error handling
   - Request/response logging with truncation
 
@@ -37,7 +39,7 @@
 
 ### Telemetry (`telemetry/`)
 - **Purpose**: Initializes the **OTLP/HTTP exporter** that sends traces and logger events to whichever collector `OTEL_*` or `OTLP_*` env vars point to.
-- **Key Components**: 
+- **Key Components**:
   - **`newTraceExporter()`**: Supports **automatic Grafana Cloud authentication** by parsing `glc_` tokens.
   - **`normalizeEndpoint()`**: Intelligent URL and signal path handling.
   - **`RecordLog()`**: Reusable helper that replays logger entries into OTLP.

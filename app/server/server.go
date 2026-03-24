@@ -50,8 +50,9 @@ func NewServer(cfg *config.Config, logger *logger.Logger, manager *providers.Man
 func (s *Server) setupRoutes() http.Handler {
 	mux := http.NewServeMux()
 
-	// Health endpoint (no auth required)
+	// Health and diagnostics (no auth required)
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/v1/diagnostics/upstream-models", s.handleUpstreamModelsCheck)
 
 	// Protected endpoints
 	mux.HandleFunc("/v1/models", s.authMiddleware(s.handleModels))
