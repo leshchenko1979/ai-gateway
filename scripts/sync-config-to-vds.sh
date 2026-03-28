@@ -55,11 +55,12 @@ echo "[sync] scp .env (runtime only, SSH and GHCR pull vars excluded)"
 scp "${ssh_opts[@]}" "$RUNTIME_ENV" "${target}:${REMOTE_DOCKER_DIR}/.env"
 
 echo "[sync] remote: optional docker login + compose pull && up -d"
+# Heredoc is expanded locally before ssh; use :- on GHCR_* so set -u does not fail when unset.
 ssh "${ssh_opts[@]}" "$target" bash -s <<REMOTE
 set -euo pipefail
 cd "${REMOTE_DOCKER_DIR}"
 if [[ -n "${GHCR_PULL_TOKEN:-}" ]] && [[ -n "${GHCR_PULL_USER:-}" ]]; then
-  echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io -u "${GHCR_PULL_USER}" --password-stdin
+  echo "${GHCR_PULL_TOKEN:-}" | docker login ghcr.io -u "${GHCR_PULL_USER:-}" --password-stdin
 fi
 docker compose pull && docker compose up -d
 REMOTE
