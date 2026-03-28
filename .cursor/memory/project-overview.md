@@ -7,7 +7,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 - **Language**: Go 1.21+
 - **Architecture**: REST API gateway with route-based provider selection
 - **Configuration**: YAML-based with environment variable substitution and fail-fast missing-var checks
-- **Deployment**: Systemd service or Docker; SSH-based `install.sh` supports both `deploy` (systemd) and `deploy-docker` (Docker + Traefik)
+- **Deployment**: Systemd service or Docker; SSH-based [`ops.sh`](../../ops.sh) supports `deploy` (systemd) and `deploy-docker` (delegates to `scripts/sync-config-to-vds.sh`, same as CI: GHCR pull + bind-mounted config). **CI:** push to `main` builds/pushes GHCR image and SSH deploys `compose pull && up -d`.
 - **Logging**: Structured JSON logging with API key redaction
 - **Security**: API key authentication, TLS support
 
@@ -47,5 +47,5 @@ Resolves "tools is incompatible with response_format" errors:
 - **OpenAI-Compatible APIs**: Works with any provider supporting OpenAI API format
 - **Environment Variables**: All sensitive data via `${VAR_NAME}` syntax; missing vars fail fast
 - **Systemd Service**: Managed deployment with automatic restarts
-- **SSH Deployment**: Remote deployment via install.sh script
+- **SSH Deployment**: Remote deployment via `ops.sh`
 - **Observability**: Traces and structured logs flow through the env-driven OTLP exporter (see `telemetry/`), making them available in whichever backend `OTLP_ENDPOINT` targets.

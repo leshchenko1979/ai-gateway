@@ -3,6 +3,7 @@
 .gitignore
 *.md
 .env
+config.yaml
 ai-gateway
 ai-gateway-linux
 *.test

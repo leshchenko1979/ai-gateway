@@ -1,5 +1,8 @@
 #!/bin/bash
-
+#
+# Operator CLI: local binary build/install, remote systemd deploy, and remote Docker via GHCR (ops.sh deploy-docker → scripts/sync-config-to-vds.sh).
+# For Docker on the VDS, use CI-built images (GHCR) + ./scripts/sync-config-to-vds.sh or ./ops.sh deploy-docker — see README.
+#
 set -e
 # Source .env file if it exists
 if [ -f ".env" ]; then
@@ -69,7 +72,7 @@ build_linux() {
 # Install the binary locally
 install() {
     if [ ! -f "$BINARY_NAME" ]; then
-        print_error "Binary not found. Run './install.sh build' first."
+        print_error "Binary not found. Run \"$0 build\" first."
         exit 1
     fi
 
@@ -82,7 +85,7 @@ install() {
 # Install systemd service (local)
 install_service() {
     if [ ! -f "$BINARY_NAME" ]; then
-        print_error "Binary not found. Run './install.sh build' first."
+        print_error "Binary not found. Run \"$0 build\" first."
         exit 1
     fi
 
@@ -464,7 +467,7 @@ REMOTE_INSTALL
     print_info "Service is running on ${SSH_HOST}"
 }
 
-# Deploy to remote server as Docker container
+# Same remote path as ./scripts/sync-config-to-vds.sh: GHCR image in compose, bind-mounted config.yaml, pull + up -d.
 deploy_docker() {
     if [ -z "$SSH_HOST" ]; then
         print_error "SSH_HOST is not set. Set it in .env or as environment variable"
@@ -476,60 +479,24 @@ deploy_docker() {
         exit 1
     fi
 
-    print_info "Deploying to remote server as Docker container: ${SSH_USER}@${SSH_HOST}"
-
-    # Create remote directory
-    print_info "Creating remote directory $REMOTE_DOCKER_DIR..."
-    ssh_exec "mkdir -p $REMOTE_DOCKER_DIR"
-
-    # Prepare filtered .env for runtime (exclude SSH vars)
-    local env_filtered=""
-    if [ -f ".env" ]; then
-        grep -vE '^(SSH_HOST|SSH_USER|SSH_KEY|SSH_PORT)=' .env > /tmp/ai-gateway-docker.env 2>/dev/null || true
-        if [ -s /tmp/ai-gateway-docker.env ]; then
-            env_filtered="/tmp/ai-gateway-docker.env"
-        fi
-    fi
-    if [ -z "$env_filtered" ]; then
-        print_warning "No .env or no runtime vars found. Container may fail without GATEWAY_API_KEY and provider keys."
+    if [ ! -f ".env" ]; then
+        print_error ".env not found. Copy from .env.example and set GHCR_IMAGE, IMAGE_TAG, DOMAIN, and runtime keys."
+        exit 1
     fi
 
-    # Build tarball: source files, Dockerfile, docker-compose, config, filtered .env (exclude .git, binary)
-    print_info "Creating deployment archive..."
-    local ssh_opts=""
-    [ -n "$SSH_KEY" ] && ssh_opts="$ssh_opts -i $SSH_KEY"
-    [ -n "$SSH_PORT" ] && ssh_opts="$ssh_opts -p $SSH_PORT"
-    ssh_opts="$ssh_opts -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+    OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SYNC_SCRIPT="${OPS_DIR}/scripts/sync-config-to-vds.sh"
 
-    if [ -n "$env_filtered" ]; then
-        cp "$env_filtered" /tmp/.env.docker
-        tar czf - --format=ustar \
-            --exclude='.git' \
-            --exclude='.env' \
-            --exclude='ai-gateway' \
-            --exclude='ai-gateway-linux' \
-            --exclude='*.test' \
-            -C . . \
-            -C /tmp .env.docker 2>/dev/null | \
-        ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_DOCKER_DIR && mv $REMOTE_DOCKER_DIR/.env.docker $REMOTE_DOCKER_DIR/.env"
-        rm -f /tmp/ai-gateway-docker.env /tmp/.env.docker
-    else
-        tar czf - --format=ustar \
-            --exclude='.git' \
-            --exclude='.env' \
-            --exclude='ai-gateway' \
-            --exclude='ai-gateway-linux' \
-            --exclude='*.test' \
-            -C . . 2>/dev/null | \
-        ssh $ssh_opts ${SSH_USER}@${SSH_HOST} "tar xzf - -C $REMOTE_DOCKER_DIR"
-        rm -f /tmp/ai-gateway-docker.env
+    if [ ! -f "$SYNC_SCRIPT" ]; then
+        print_error "Missing: $SYNC_SCRIPT"
+        exit 1
     fi
 
-    # Build and start on remote
-    print_info "Building Docker image and starting container on remote..."
-    ssh_exec "cd $REMOTE_DOCKER_DIR && docker compose build && docker compose up -d"
+    print_info "Deploying Docker stack to ${SSH_USER}@${SSH_HOST} (${REMOTE_DOCKER_DIR})"
+    print_info "Using ${SYNC_SCRIPT} — uploads docker-compose.yml, config.yaml, filtered .env; pulls GHCR image; bind-mounts config."
 
-    # Wait for container to be running
+    bash "$SYNC_SCRIPT"
+
     print_info "Waiting for container to start..."
     local max_wait=90
     local wait_time=0
@@ -563,11 +530,13 @@ usage() {
     echo "  install         - Install the binary to $INSTALL_DIR (local)"
     echo "  install-service - Install binary and systemd service (local)"
     echo "  deploy          - Build and deploy to remote server as systemd service"
-    echo "  deploy-docker   - Build and deploy to remote server as Docker container"
+    echo "  deploy-docker   - Upload compose + config + .env, pull GHCR image, start (same as scripts/sync-config-to-vds.sh)"
     echo ""
-    echo "Remote Deployment (for 'deploy' and 'deploy-docker'):"
+    echo "Docker on VDS (recommended): push to main (GHCR) + ./scripts/sync-config-to-vds.sh — see README."
+    echo ""
+    echo "Remote deployment (for deploy and deploy-docker):"
     echo "  Set in .env: SSH_HOST, SSH_USER, DOMAIN (and optionally SSH_KEY, SSH_PORT)"
-    echo "  Or override: SSH_HOST=host SSH_USER=deploy ./install.sh deploy"
+    echo "  Or override: SSH_HOST=host SSH_USER=deploy $0 deploy"
     exit 1
 }
 

@@ -1,5 +1,13 @@
 # Recent Changes
 
+## GitHub Actions + GHCR + VDS deploy (2026-03-28)
+
+- **CI:** `.github/workflows/deploy.yml` — on push to `main`, build/push image to `ghcr.io/leshchenko1979/ai-gateway` (`:main`, `:sha-*`) with GHA BuildKit cache; deploy job SSHs to VDS and runs `docker compose pull && up -d` in `/root/services/ai-gateway` (optional `GHCR_PULL_*` for private GHCR).
+- **Compose:** `image:` + `GHCR_IMAGE` / `IMAGE_TAG`; bind-mount `./config.yaml:/app/config.yaml:ro`.
+- **Dockerfile:** `COPY config.yaml.example` as `/app/config.yaml` (real config from mount at runtime).
+- **Ops:** `scripts/sync-config-to-vds.sh` uploads `docker-compose.yml`, `config.yaml`, filtered `.env`; VS Code task **Sync config and env to VDS** (non-default build). `.env.example` documents image vars and optional pull credentials.
+- **Rename:** `install.sh` → **`ops.sh`** (same commands; header/help point to GHCR + sync script for Docker). **`deploy-docker`** now calls `scripts/sync-config-to-vds.sh` (pull + bind mount), not remote `docker compose build`.
+
 ## Upstream models diagnostics HTTP endpoint (2026-03-24)
 
 - `GET /v1/diagnostics/upstream-models` (no auth): parallel checks of each provider’s `GET {base_url}/models`; JSON `ok` + per-provider results; **503** if any provider fails, **200** if all succeed.

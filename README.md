@@ -29,8 +29,8 @@ cp config.yaml.example config.yaml
 
 2. **Deploy locally:**
 ```bash
-./install.sh build                    # Build binary
-./install.sh install-service         # Install as systemd service
+./ops.sh build                    # Build binary
+./ops.sh install-service         # Install as systemd service
 sudo systemctl start ai-gateway      # Start service
 ```
 
@@ -38,15 +38,17 @@ sudo systemctl start ai-gateway      # Start service
 ```bash
 cp .env.example .env                  # Configure SSH credentials
 # Edit .env with your server details or put them into the command string
-SSH_HOST=your-server.com ./install.sh deploy
+SSH_HOST=your-server.com ./ops.sh deploy
 ```
 
 ### Deployment Options
 
-- **Local**: `build` → `install-service` for development/production on same machine
-- **Remote (systemd)**: `deploy` handles SSH upload, remote installation, and systemd service setup
-- **Remote (Docker)**: `deploy-docker` builds and deploys as a container behind Traefik
-- **Binary-only**: `install` for basic binary installation without systemd service
+Commands below use [`ops.sh`](ops.sh) at the repo root (formerly `install.sh`).
+
+- **Local**: `./ops.sh build` → `./ops.sh install-service` for development/production on same machine
+- **Remote (systemd)**: `./ops.sh deploy` — SSH upload, remote installation, and systemd service setup
+- **Remote (Docker, CLI)**: `./ops.sh deploy-docker` — same as `./scripts/sync-config-to-vds.sh` (upload `docker-compose.yml`, `config.yaml`, filtered `.env`; `docker compose pull && up -d` with GHCR image and bind-mounted config)
+- **Binary-only**: `./ops.sh install` — copy binary only, no systemd service
 
 For systemd deployments, use a reverse proxy like `nginx` or `traefik` to set up TLS termination and secure the traffic to your gateway.
 
@@ -60,10 +62,33 @@ Deploy as a container behind Traefik (or any reverse proxy) for HTTPS terminatio
    ```bash
    cp .env.example .env   # if needed
    # Edit .env with SSH_HOST, SSH_USER, DOMAIN, and runtime vars (GATEWAY_API_KEY, etc.)
-   ./install.sh deploy-docker
+   ./ops.sh deploy-docker
    ```
 4. **Domain**: Set `DOMAIN` in `.env` (e.g. `DOMAIN=ai-gateway.example.com`). docker-compose uses it for the Traefik Host rule.
 5. **n8n integration**: Set Base URL to `https://ai-gateway.redevest.ru/v1`, Model to a route name (e.g. `dynamic/n8n`), API Key to your `GATEWAY_API_KEY` value.
+
+### CI/CD (GitHub Actions + GHCR)
+
+Pushes to `main` build the image on GitHub, push to GHCR, then SSH into the VDS and run `docker compose pull && docker compose up -d` in `/root/services/ai-gateway`.
+
+**Repository secrets (CI / deploy job)**
+
+| Secret | Purpose |
+|--------|---------|
+| `SSH_HOST` | VDS hostname or IP |
+| `SSH_USER` | SSH user |
+| `SSH_PRIVATE_KEY` | Private key (PEM) for that user |
+| `SSH_PORT` | Optional; defaults to `22` if omitted |
+| `GHCR_PULL_USER` | Optional; GitHub username for `docker login` on the VDS when the package is **private** |
+| `GHCR_PULL_TOKEN` | Optional; PAT with `read:packages` for that login |
+
+**Runtime on the VDS** (not stored in GitHub): a gitignored `config.yaml` and `.env` beside `docker-compose.yml`. The compose file pulls `ghcr.io/leshchenko1979/ai-gateway` tagged by `IMAGE_TAG` (default `main`). Set `GHCR_IMAGE` and `IMAGE_TAG` in the VDS `.env` if you use a fork or pin a digest tag.
+
+**Syncing config from your machine** without committing secrets: copy `config.yaml` and `.env` from the examples, fill them in, then run `./scripts/sync-config-to-vds.sh`. That uploads `docker-compose.yml`, `config.yaml`, and a filtered `.env` (SSH and `GHCR_PULL_*` lines are stripped so they are not left on the server), optionally runs `docker login` on the VDS when `GHCR_PULL_USER` and `GHCR_PULL_TOKEN` are set locally, then `docker compose pull && up -d`. In Cursor/VS Code, use **Tasks → Run Build Task** and choose **Sync config and env to VDS** (non-default build task).
+
+**Local Docker build** instead of pulling GHCR: add a gitignored `docker-compose.override.yml` that sets `build: { context: ., dockerfile: Dockerfile }` on `ai-gateway` and drop `image:` for local use.
+
+**CLI alternative to the VS Code sync task**: `./ops.sh deploy-docker` runs the same steps as `./scripts/sync-config-to-vds.sh`, then waits for the container. Use either the script or `ops.sh`; both match the current [`docker-compose.yml`](docker-compose.yml) (pulled image + `./config.yaml` mount).
 
 ## Configuration
 

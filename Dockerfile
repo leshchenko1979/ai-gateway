@@ -10,6 +10,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o ai-gateway .
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /app
 COPY --from=builder /build/ai-gateway .
-COPY config.yaml .
+# Production overrides this path via bind mount; example keeps CI/local builds working without gitignored config.yaml
+COPY config.yaml.example ./config.yaml
 EXPOSE 8080
 ENTRYPOINT ["./ai-gateway"]

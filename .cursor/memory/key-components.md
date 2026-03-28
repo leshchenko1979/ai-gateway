@@ -109,12 +109,14 @@ graph TD
 - Auto-restart: Service failure recovery
 
 ### SSH Deployment (systemd)
-- Script: `install.sh deploy`
+- Script: `ops.sh deploy`
 - Remote operations: Binary copy, config deployment
 - Service management: Stop/start/restart cycle
 
 ### Docker Deployment
-- Script: `install.sh deploy-docker`
+- **CI/CD:** `.github/workflows/deploy.yml` — build/push `ghcr.io/leshchenko1979/ai-gateway`, SSH deploy `docker compose pull && up -d` on VDS (`/root/services/ai-gateway`). Secrets: `SSH_*`, optional `GHCR_PULL_*` for private registry.
+- **Runtime:** Compose uses pulled `image:` + bind-mount `./config.yaml`; Dockerfile bakes `config.yaml.example` only.
+- **Sync:** `scripts/sync-config-to-vds.sh` pushes `docker-compose.yml`, `config.yaml`, filtered `.env`; task **Sync config and env to VDS** in `.vscode/tasks.json`.
+- **CLI deploy:** `ops.sh deploy-docker` delegates to `scripts/sync-config-to-vds.sh` (compose pull, bind-mounted `config.yaml`, same as CI)
 - Files: `Dockerfile`, `docker-compose.yml`, `.dockerignore`
 - Traefik: Host rule uses `DOMAIN` from `.env`
-- VSCode task: `deploy-docker` in `.vscode/tasks.json`

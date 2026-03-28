@@ -203,7 +203,7 @@ Use an environment-driven OTLP exporter so traces and structured logger events f
 
 ### Context
 - Instrumentation already touches request handling and logging, so routing both through OTLP maximizes observability.
-- The deployment workflow centers on `.env` and `install.sh`, making environment variables the natural control point for OTLP settings.
+- The deployment workflow centers on `.env` and `ops.sh` (and CI/sync scripts for Docker), making environment variables the natural control point for OTLP settings.
 - Locking to a vendor like Grafana Cloud would duplicate documentation and restrict operators who prefer another collector.
 
 ### Options Considered

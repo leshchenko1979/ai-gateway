@@ -1,11 +1,11 @@
 services:
   ai-gateway:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${GHCR_IMAGE:-ghcr.io/leshchenko1979/ai-gateway}:${IMAGE_TAG:-main}
     container_name: ai-gateway
     restart: always
     env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
     networks:
       - traefik-public
     expose:

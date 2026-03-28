@@ -26,7 +26,8 @@ coverage.html
 .build_cache/
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .idea/
 *.swp
 *.swo
@@ -34,6 +35,9 @@ coverage.html
 
 # Helper scripts
 ssh-helper.sh
+
+# Local compose override (e.g. build from Dockerfile instead of GHCR)
+docker-compose.override.yml
 
 # OS
 .DS_Store
