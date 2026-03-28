@@ -4,7 +4,7 @@
 A lightweight, OpenAI-compatible API gateway written in Go that routes requests to AI providers based on exact model name matching. Features route-based provider selection with sequential fallback, conflict resolution for tools/response_format incompatibility, and full support for multimodal messages (text + images).
 
 ## Tech Stack
-- **Language**: Go 1.21+
+- **Language**: Go 1.25+ (see `app/go.mod`)
 - **Architecture**: REST API gateway with route-based provider selection
 - **Configuration**: YAML-based with environment variable substitution and fail-fast missing-var checks
 - **Deployment**: Systemd service or Docker; SSH-based [`ops.sh`](../../ops.sh) supports `deploy` (systemd) and `deploy-docker` (delegates to `scripts/sync-config-to-vds.sh`, same as CI: GHCR pull + bind-mounted config). **CI:** push to `main` builds/pushes GHCR image and SSH deploys `compose pull && up -d`.

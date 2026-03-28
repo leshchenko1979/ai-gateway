@@ -1,8 +1,17 @@
 # Recent Changes
 
+## README and public-repo docs (2026-03-28)
+
+- **README:** CI test command (`-count=1`), GHCR tags, Go 1.25+ requirement, binary size (~13MB), `default_timeout` example vs default 30s, correct unauthenticated routes (`/health`, `/v1/diagnostics/upstream-models`) with diagnostics section and security note, fork-friendly n8n Base URL placeholder, workflow badge, links to contributing/security docs.
+- **Badges (optional polish):** License (MIT) and Go version (from `app/go.mod`) alongside CI; License section links to `LICENSE`.
+- **CONTRIBUTING.md:** Issues vs security, `gofmt`, PR checklist, doc update note.
+- **SECURITY.md:** Scope (in/out), supported versions, link to contributing for non-security work.
+- **New:** [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md).
+- **Memory:** `project-overview.md` Go version aligned with `app/go.mod`.
+
 ## GitHub Actions + GHCR + VDS deploy (2026-03-28)
 
-- **CI:** `.github/workflows/deploy.yml` — on push to `main`, build/push image to `ghcr.io/leshchenko1979/ai-gateway` (`:main`, `:sha-*`) with GHA BuildKit cache; deploy job SSHs to VDS and runs `docker compose pull && up -d` in `/root/services/ai-gateway` (optional `GHCR_PULL_*` for private GHCR).
+- **CI:** `.github/workflows/deploy.yml` — on push to `main`, `go test ./...` in `app/` then build/push image to `ghcr.io/leshchenko1979/ai-gateway` (`:main`, `:sha-*`) with GHA BuildKit cache; deploy job SSHs to VDS and runs `docker compose pull && up -d` in `/root/services/ai-gateway` (optional `GHCR_PULL_*` for private GHCR).
 - **Compose:** `image:` + `GHCR_IMAGE` / `IMAGE_TAG`; bind-mount `./config.yaml:/app/config.yaml:ro`.
 - **Dockerfile:** `COPY config.yaml.example` as `/app/config.yaml` (real config from mount at runtime).
 - **Ops:** `scripts/sync-config-to-vds.sh` uploads `docker-compose.yml`, `config.yaml`, filtered `.env`; VS Code task **Sync config and env to VDS** (non-default build). `.env.example` documents image vars and optional pull credentials.

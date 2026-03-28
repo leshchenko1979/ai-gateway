@@ -1,6 +1,12 @@
 # AI Gateway
 
+[![Build and deploy](https://github.com/leshchenko1979/ai-gateway/actions/workflows/deploy.yml/badge.svg)](https://github.com/leshchenko1979/ai-gateway/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go version](https://img.shields.io/github/go-mod/go-version/leshchenko1979/ai-gateway?filename=app%2Fgo.mod&logo=go&label=go)](app/go.mod)
+
 A lightweight, OpenAI-compatible API gateway written in Go that routes requests sequentially through configured providers until a successful response is received.
+
+**Build requirements:** Go **1.25+** (see [`app/go.mod`](app/go.mod)).
 
 ## Why Choose AI Gateway?
 
@@ -9,7 +15,7 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 **Daily Use Case**: Connects to multiple AI providers with free tiers, automatically cycling between them when rate limits are hit - ensuring continuous service.
 
 ### Key Benefits
-- **Lightweight**: ~20MB binary with minimal memory footprint
+- **Lightweight**: Small stripped binary (~13MB typical local build) with minimal memory footprint
 - **Fast**: Compiled Go with efficient runtime, no JVM overhead
 - **Reliable**: Sequential provider fallback, automatic retry logic
 - **Simple**: Single binary deployment, YAML configuration
@@ -65,11 +71,11 @@ Deploy as a container behind Traefik (or any reverse proxy) for HTTPS terminatio
    ./ops.sh deploy-docker
    ```
 4. **Domain**: Set `DOMAIN` in `.env` (e.g. `DOMAIN=ai-gateway.example.com`). docker-compose uses it for the Traefik Host rule.
-5. **n8n integration**: Set Base URL to `https://ai-gateway.redevest.ru/v1`, Model to a route name (e.g. `dynamic/n8n`), API Key to your `GATEWAY_API_KEY` value.
+5. **n8n integration**: Set Base URL to `https://YOUR_DOMAIN/v1` (your Traefik host), Model to a route name from `config.yaml`, API Key to your `GATEWAY_API_KEY` value.
 
 ### CI/CD (GitHub Actions + GHCR)
 
-Pushes to `main` build the image on GitHub, push to GHCR, then SSH into the VDS and run `docker compose pull && docker compose up -d` in `/root/services/ai-gateway`.
+Pushes to `main` run **`go test ./... -count=1`** in [`app/`](app/) first; if tests pass, the workflow builds the image on GitHub, pushes images to GHCR (`:main` and `:sha-<short>`), then SSHs into the VDS and runs `docker compose pull && docker compose up -d` in `/root/services/ai-gateway`.
 
 **Repository secrets (CI / deploy job)**
 
@@ -97,7 +103,7 @@ The gateway uses YAML configuration with environment variable substitution:
 ```yaml
 api_key: ${GATEWAY_API_KEY}  # Gateway authentication key
 port: 8080                   # Optional, defaults to 8080
-default_timeout: 300s        # Default timeout for requests
+default_timeout: 300s        # Example; omit for built-in default 30s
 
 providers:
   - name: cerebras
@@ -132,15 +138,26 @@ You can put your API keys into `config.yaml` directly, but for security purposes
 ## API Endpoints
 
 ### Authentication
-All endpoints except for `/health` require authentication.
+These endpoints do **not** require authentication:
 
-Use `X-Api-Key` header or `Authorization: Bearer <token>` against configured gateway API key.
+- `GET /health`
+- `GET /v1/diagnostics/upstream-models` — see [Diagnostics](#diagnostics)
+
+For all other routes (for example `GET /v1/models` and `POST /v1/chat/completions`), use `X-Api-Key` or `Authorization: Bearer <token>` with your configured gateway API key.
 
 ### Health Check
 ```bash
 GET /health
 ```
 Returns `{"status": "healthy"}` - no authentication required.
+
+### Diagnostics
+```bash
+GET /v1/diagnostics/upstream-models
+```
+No authentication. Calls each configured provider’s OpenAI-style `GET {base_url}/models` in parallel and returns JSON with an overall `ok` flag and per-provider results. Responds with **503** if any provider check fails, **200** if all succeed.
+
+**Security:** This route is unauthenticated and triggers outbound requests to provider APIs. Do not expose it on the public internet without network restrictions (for example reverse-proxy allowlists, VPN, or private ingress).
 
 ### List Models
 ```bash
@@ -186,7 +203,14 @@ The gateway can send OpenTelemetry traces and logger events directly to any OTLP
 ### How it works
 The gateway uses the **OTLP HTTP exporter** for maximum compatibility (bypassing gRPC/ALPN issues). It automatically handles the `/v1/traces` signal path, ensuring that if you provide a base URL (like Grafana's `/otlp`), it still reaches the correct endpoint.
 
+## Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and PR expectations. For **security-sensitive** issues, use the process in [SECURITY.md](SECURITY.md) instead of a public issue.
+
+## Reporting vulnerabilities
+
+See [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
