@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "config.yaml.example"
+      - "docker-compose.yml"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 permissions:
@@ -16,6 +23,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+
+      - name: Run Go tests
+        working-directory: app
+        run: go test ./... -count=1
 
       - id: img
         run: |
