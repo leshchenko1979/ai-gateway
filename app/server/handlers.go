@@ -52,6 +52,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 // handleUpstreamModelsCheck runs GET {base_url}/models against each configured provider (parallel).
 func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
+		s.logger.Info("Method not allowed", map[string]interface{}{
+			"method": r.Method,
+			"path":   r.URL.Path,
+		})
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -68,6 +72,9 @@ func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Reques
 	status := http.StatusOK
 	if !allOK {
 		status = http.StatusServiceUnavailable
+		s.logger.Info("Upstream health check failed", map[string]interface{}{
+			"providers": results,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -83,6 +90,12 @@ func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Reques
 
 // writeErrorResponse writes a unified error response
 func (s *Server) writeErrorResponse(w http.ResponseWriter, errorType, message, code string, statusCode int, details interface{}) {
+	s.logger.Error(message, nil, map[string]interface{}{
+		"error_type": errorType,
+		"code":      code,
+		"status":    statusCode,
+		"details":   details,
+	})
 	response := types.ErrorResponse{
 		Error: types.ErrorDetails{
 			Type:    errorType,
