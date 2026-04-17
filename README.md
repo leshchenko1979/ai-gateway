@@ -173,6 +173,25 @@ Headers: X-Api-Key: <gateway-api-key> OR Authorization: Bearer <token>
 ```
 Routes requests to providers. Set model to the desired route name.
 
+**Response with routing summary:**
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "dynamic/n8n",
+  "choices": [...],
+  "routing_summary": {
+    "route_name": "dynamic/n8n",
+    "steps": [
+      {"step_index": 0, "provider": "cerebras", "model": "gpt-oss-120b", "success": true, "duration_ms": 1234},
+      {"step_index": 1, "provider": "openrouter", "model": "nvidia/nemotron-3-nano-30b-a3b:free", "success": false, "duration_ms": 500, "error": "rate limit exceeded"}
+    ]
+  }
+}
+```
+
+The `routing_summary` field shows which route steps were attempted, which succeeded, and the timing in milliseconds for each step. Failed steps include the error message. Included in both successful responses and error responses when all steps fail.
+
 ## Service Management
 ```bash
 sudo systemctl start ai-gateway     # Start service

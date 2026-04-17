@@ -75,6 +75,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 	defer routeSpan.End()
 
 	var stepErrors []types.RouteStepError
+	var stepResults []types.RouteStepResult
 
 	// Try each step in the route
 	for stepIndex, step := range route.Steps {
@@ -141,6 +142,14 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 				Model:     step.Model,
 				Error:     err.Error(),
 			})
+			stepResults = append(stepResults, types.RouteStepResult{
+				StepIndex:  stepIndex,
+				Provider:   step.Provider,
+				Model:      step.Model,
+				Success:    false,
+				DurationMs: duration.Milliseconds(),
+				Error:      err.Error(),
+			})
 			stepSpan.End()
 			continue
 		}
@@ -165,15 +174,38 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 		stepSpan.SetAttributes(attribute.String("step.response", string(responseJSON)))
 		stepSpan.SetStatus(codes.Ok, "success")
 		stepSpan.End()
+
+		// Record successful step
+		stepResults = append(stepResults, types.RouteStepResult{
+			StepIndex:  stepIndex,
+			Provider:   step.Provider,
+			Model:      step.Model,
+			Success:    true,
+			DurationMs: duration.Milliseconds(),
+		})
+
+		// Attach routing summary to response
+		response.RoutingSummary = &types.RoutingSummary{
+			RouteName: route.Name,
+			Steps:     stepResults,
+		}
 		return response, nil
 	}
 
 	// All route steps failed
 	routeSpan.SetStatus(codes.Error, "all steps failed")
 	routeSpan.AddEvent("route.failed", trace.WithAttributes(attribute.Int("route.step.failures", len(route.Steps))))
+
+	// Build routing summary from stepResults
+	routingSummary := &types.RoutingSummary{
+		RouteName: route.Name,
+		Steps:     stepResults,
+	}
+
 	routeError := types.RouteError{
-		Route:  *route,
-		Errors: stepErrors,
+		Route:          *route,
+		Errors:         stepErrors,
+		RoutingSummary: routingSummary,
 	}
 	return nil, routeError
 }

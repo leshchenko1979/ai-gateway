@@ -22,8 +22,9 @@ type ErrorDetails struct {
 
 // RouteError represents a detailed error when all route steps fail
 type RouteError struct {
-	Route  config.Route      `json:"route"`
-	Errors []RouteStepError  `json:"errors"`
+	Route          config.Route      `json:"route"`
+	Errors         []RouteStepError  `json:"errors"`
+	RoutingSummary *RoutingSummary   `json:"routing_summary,omitempty"`
 }
 
 // RouteStepError represents an error from a specific route step
@@ -303,6 +304,9 @@ type ChatResponse struct {
 	Model   string   `json:"-"`
 	Choices []Choice `json:"-"`
 	Usage   Usage    `json:"-"`
+
+	// RoutingSummary contains the history of route steps tried
+	RoutingSummary *RoutingSummary `json:"routing_summary,omitempty"`
 }
 
 // UnmarshalJSON stores raw JSON and extracts key fields for logging
@@ -331,12 +335,27 @@ func (r *ChatResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MarshalJSON returns the raw JSON unchanged
+// MarshalJSON returns the raw JSON unchanged, unless RoutingSummary is set
 func (r ChatResponse) MarshalJSON() ([]byte, error) {
 	if r.Raw == nil {
 		return nil, fmt.Errorf("no raw JSON to marshal")
 	}
-	return r.Raw, nil
+
+	// If no routing summary, return raw JSON as-is
+	if r.RoutingSummary == nil {
+		return r.Raw, nil
+	}
+
+	// Parse raw JSON and inject routing_summary
+	var data map[string]interface{}
+	if err := json.Unmarshal(r.Raw, &data); err != nil {
+		return r.Raw, nil
+	}
+
+	// Add routing summary
+	data["routing_summary"] = r.RoutingSummary
+
+	return json.Marshal(data)
 }
 
 // Choice represents a chat completion choice
@@ -365,4 +384,20 @@ type Model struct {
 	Object  string `json:"object"`
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
+}
+
+// RouteStepResult represents the result of a single route step attempt
+type RouteStepResult struct {
+	StepIndex  int    `json:"step_index"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	Success    bool   `json:"success"`
+	DurationMs int64  `json:"duration_ms"`
+	Error      string `json:"error,omitempty"`
+}
+
+// RoutingSummary contains the history of route steps tried for a request
+type RoutingSummary struct {
+	RouteName string           `json:"route_name"`
+	Steps     []RouteStepResult `json:"steps"`
 }
