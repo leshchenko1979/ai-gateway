@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Push docker-compose.yml, gitignored config.yaml, and runtime .env to the VDS, then
-# docker compose pull && up -d. Optional GHCR_PULL_* in local .env for private registry login.
+# docker compose pull && up -d && restart ai-gateway (so config.yaml changes take effect).
+# Optional GHCR_PULL_* in local .env for private registry login.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -62,7 +63,7 @@ cd "${REMOTE_DOCKER_DIR}"
 if [[ -n "${GHCR_PULL_TOKEN:-}" ]] && [[ -n "${GHCR_PULL_USER:-}" ]]; then
   echo "${GHCR_PULL_TOKEN:-}" | docker login ghcr.io -u "${GHCR_PULL_USER:-}" --password-stdin
 fi
-docker compose pull && docker compose up -d
+docker compose pull && docker compose up -d && docker compose restart ai-gateway
 REMOTE
 
 echo "[sync] done."
