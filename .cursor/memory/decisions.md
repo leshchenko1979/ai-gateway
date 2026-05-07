@@ -139,7 +139,9 @@ Implement explicit multi-level timeout semantics:
 - Final naming: `default_route_timeout`, `route_timeout`, `step_timeout` (breaking migration for user clarity).
 - Route timeout is now enforced in manager execution logic with `context.WithTimeout`, producing structured `ROUTE_TIMEOUT` errors with partial step summaries.
 - Provider requests are context-bound (`http.NewRequestWithContext`) so route timeout cancels in-flight upstream calls.
-- HTTP server read/write timeouts remain derived from route step totals (clamped) to avoid premature server cutoff.
+- HTTP server read/write timeouts remain derived from effective route budgets with a 30s floor and no upper clamp, so large route budgets are not preempted by server timeout.
+- Config loading now uses strict known-field decoding (`KnownFields(true)`), so legacy/unknown timeout keys fail fast instead of being silently ignored.
+- Timeout values must be strictly positive (`> 0`) to prevent instant-cancel misconfiguration.
 
 ## Multimodal Message Support
 

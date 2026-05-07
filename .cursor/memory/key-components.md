@@ -8,10 +8,11 @@
 - **Key Functions**:
   - `LoadConfig()`: Loads and validates configuration
   - `ValidateTimeoutSettings()`: Reusable timeout validation for both file-loaded and programmatic configs
+  - Strict decode (`KnownFields(true)`): Unknown YAML keys fail fast during config load
   - `GetStepTimeout()`: Resolves per-step timeout (`step_timeout` -> 30s fallback)
   - `GetRouteTimeout()`: Resolves route budget (`route_timeout` -> `default_route_timeout` -> derived/fallback)
   - `MaxSequentialRouteDuration()`: Computes worst-case per-request route duration by summing step timeouts per route and taking max route sum
-  - `EffectiveHTTPServerTimeouts()`: Derives server read/write timeout from route step totals (floor/ceiling)
+  - `EffectiveHTTPServerTimeouts()`: Derives server read/write timeout from effective route budget with a 30s floor (no upper clamp)
   - Route/provider validation with cross-reference checking
 - **Ops**: Task **Verify provider model lists** runs `go run ./cmd/check-models` from `app/` (see `.vscode/tasks.json`) to confirm each provider’s upstream `/models` endpoint.
 
@@ -78,7 +79,7 @@ graph TD
 ### Configuration Loading
 - File lookup: `./config.yaml` → `/etc/ai-gateway/config.yaml`
 - Environment variable expansion: `${VAR_NAME}` syntax with missing-var fail fast
-- Validation: Provider/route cross-references, timeout parsing
+- Validation: Provider/route cross-references, strict known-field schema, timeout parsing with `> 0` enforcement
 
 ### Provider Communication
 - HTTP POST to `/v1/chat/completions`

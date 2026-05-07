@@ -133,6 +133,7 @@ Timeout behavior:
 - Route budget resolution is `route_timeout -> default_route_timeout -> derived from step timeouts -> 30s`.
 - Step call timeout resolution is `step_timeout -> default_step_timeout -> 30s`.
 - If route budget is exceeded, execution stops immediately and returns `ROUTE_TIMEOUT` with partial routing summary.
+- Timeout values must be valid Go durations and strictly greater than `0` (for example `1s`, `5m`, `2h`).
 
 **Configuration Locations:**
 1. `./config.yaml` (current directory)
@@ -142,6 +143,7 @@ Timeout behavior:
 - `GATEWAY_API_KEY`: Required for authentication
 - Provider API keys: `${PROVIDER_NAME}_API_KEY`
  - Missing `${VAR}` values cause startup errors with a clear list of missing vars
+- Unknown YAML fields fail startup validation (strict schema check).
 
 
 ## API Endpoints

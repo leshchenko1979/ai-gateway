@@ -1,5 +1,13 @@
 # Recent Changes
 
+## Timeout hardening and schema strictness (2026-05-07)
+
+- **Route vs step timeout correctness:** Fixed route-timeout classification so step-level request timeouts do not get mislabeled as `ROUTE_TIMEOUT`; fallback steps continue while route budget remains.
+- **Positive-duration guard:** Timeout validation now rejects non-positive values (`<= 0`) for `default_route_timeout`, `default_step_timeout`, `route_timeout`, and `step_timeout`.
+- **Strict config schema:** `LoadConfig()` now uses strict known-field decode (`KnownFields(true)`), so legacy/unknown keys (e.g. `default_timeout`, step `timeout`) fail startup instead of being silently ignored.
+- **Server timeout derivation:** Removed upper clamp from effective HTTP server timeout derivation so configured route budgets above 24h are not preempted by server read/write timeout.
+- **Tests:** Added regression coverage for step-timeout fallback behavior, unknown legacy timeout keys, non-positive timeout rejection, and large route budget preservation.
+
 ## Timeout validation consistency hardening (2026-05-07)
 
 - Added shared `ValidateTimeoutSettings()` in `config` and reused it in full config validation.
