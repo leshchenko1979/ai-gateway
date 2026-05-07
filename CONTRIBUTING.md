@@ -33,3 +33,34 @@
 - Run `go test ./... -count=1` in `app/` and ensure tests pass.
 - Match existing style: `gofmt` formatting, package layout, and logging patterns in touched files.
 - Update user-facing docs ([README.md](README.md)) if your change affects behavior, configuration, or deployment.
+
+## Maintainer: CI/CD and VDS deploy
+
+Pushes to `main` run `go test ./... -count=1` in `app/`. If tests pass, GitHub Actions builds and pushes images to GHCR (`:main` and `:sha-<short>`), then deploys over SSH by running `docker compose pull && docker compose up -d`.
+
+### Repository secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `SSH_HOST` | VDS hostname or IP |
+| `SSH_USER` | SSH user |
+| `SSH_PRIVATE_KEY` | Private key (PEM) for that user |
+| `SSH_PORT` | Optional; defaults to `22` if omitted |
+| `GHCR_PULL_USER` | Optional; GitHub username for `docker login` on the VDS when the package is private |
+| `GHCR_PULL_TOKEN` | Optional; PAT with `read:packages` for that login |
+
+### Runtime on VDS
+
+- Keep a gitignored `config.yaml` and `.env` beside `docker-compose.yml`.
+- Compose pulls `ghcr.io/leshchenko1979/ai-gateway` using `IMAGE_TAG` (default `main`).
+- Set `GHCR_IMAGE` and `IMAGE_TAG` in VDS `.env` if you use a fork or pinned tag.
+
+### Sync config and env from local machine
+
+Use either:
+- `./scripts/sync-config-to-vds.sh`
+- `./ops.sh deploy-docker`
+
+Both upload `docker-compose.yml`, `config.yaml`, and a filtered `.env` (SSH and `GHCR_PULL_*` lines are stripped before upload), then run `docker compose pull && docker compose up -d`.
+
+In Cursor/VS Code, the non-default build task **Sync config and env to VDS** runs the same sync script.

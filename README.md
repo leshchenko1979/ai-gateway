@@ -4,107 +4,60 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go version](https://img.shields.io/github/go-mod/go-version/leshchenko1979/ai-gateway?filename=app%2Fgo.mod&logo=go&label=go)](app/go.mod)
 
-A lightweight, OpenAI-compatible API gateway written in Go that routes requests sequentially through configured providers until a successful response is received.
+AI Gateway is a lightweight, OpenAI-compatible gateway you can self-host. You define one route per model name your app uses, and the gateway tries providers in order until one succeeds. This is useful when you want fewer failures from provider rate limits or temporary outages.
 
-**Build requirements:** Go **1.25+** (see [`app/go.mod`](app/go.mod)).
+## Connect Your App
 
-## Why Choose AI Gateway?
+Use this contract in any OpenAI-compatible client (n8n, scripts, apps):
 
-**Born from Frustration**: Created when Cloudflare AI Gateway unexpectedly started disconnecting users without explanation. This self-hosted alternative gives you full control with no vendor lock-in.
+- Base URL: `https://YOUR_DOMAIN/v1` (or `http://localhost:8080/v1` locally)
+- Model: a route `name` from `config.yaml` (not the upstream provider model id)
+- Auth: `X-Api-Key: <GATEWAY_API_KEY>` or `Authorization: Bearer <GATEWAY_API_KEY>`
 
-**Daily Use Case**: Connects to multiple AI providers with free tiers, automatically cycling between them when rate limits are hit - ensuring continuous service.
+For n8n, set:
+- Base URL: `https://YOUR_DOMAIN/v1`
+- Model: a route name from `config.yaml`
+- API key: your `GATEWAY_API_KEY`
 
-### Key Benefits
-- **Lightweight**: Small stripped binary (~13MB typical local build) with minimal memory footprint
-- **Fast**: Compiled Go with efficient runtime, no JVM overhead
-- **Reliable**: Sequential provider fallback, automatic retry logic
-- **Simple**: Single binary deployment, YAML configuration
-- **Secure**: API key redaction, non-root execution, restrictive permissions
-- **Open-AI Compatible**: Drop-in replacement for OpenAI API in tools like n8n. Just change the API base and make sure the requested model name matches one of your configured routes.
+## Quick Start (Docker)
 
-## Installation
+1. Copy the config template:
 
-### Quick Setup
-
-1. **Configure the gateway:**
 ```bash
 cp config.yaml.example config.yaml
-# Edit config.yaml with your API keys
-# See Configuration below
 ```
 
-2. **Deploy locally:**
+2. Fill in your env vars (`GATEWAY_API_KEY`, provider keys such as `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`) and keep `${VAR}` references in `config.yaml`.
+
+3. If needed, copy and fill deployment env:
+
 ```bash
-./ops.sh build                    # Build binary
-./ops.sh install-service         # Install as systemd service
-sudo systemctl start ai-gateway      # Start service
+cp .env.example .env
 ```
 
-3. **Or deploy remotely:**
+4. Deploy:
+
 ```bash
-cp .env.example .env                  # Configure SSH credentials
-# Edit .env with your server details or put them into the command string
-SSH_HOST=your-server.com ./ops.sh deploy
+./ops.sh deploy-docker
 ```
 
-### Deployment Options
+5. Verify:
 
-Commands below use [`ops.sh`](ops.sh) at the repo root (formerly `install.sh`).
+```bash
+curl http://localhost:8080/health
+```
 
-- **Local**: `./ops.sh build` → `./ops.sh install-service` for development/production on same machine
-- **Remote (systemd)**: `./ops.sh deploy` — SSH upload, remote installation, and systemd service setup
-- **Remote (Docker, CLI)**: `./ops.sh deploy-docker` — same as `./scripts/sync-config-to-vds.sh` (upload `docker-compose.yml`, `config.yaml`, filtered `.env`; `docker compose pull && up -d` with GHCR image and bind-mounted config)
-- **Binary-only**: `./ops.sh install` — copy binary only, no systemd service
+If you deploy behind Traefik, set `DOMAIN` in `.env` and use `https://YOUR_DOMAIN/v1` as your client base URL.
 
-For systemd deployments, use a reverse proxy like `nginx` or `traefik` to set up TLS termination and secure the traffic to your gateway.
+## Configure Providers and Routes
 
-### Docker Installation
-
-Deploy as a container behind Traefik (or any reverse proxy) for HTTPS termination:
-
-1. **Prerequisites**: Docker on the remote server; Traefik with `traefik-public` network
-2. **Configure**: Ensure `config.yaml` and `.env` exist with your API keys (GATEWAY_API_KEY, provider keys)
-3. **Deploy**:
-   ```bash
-   cp .env.example .env   # if needed
-   # Edit .env with SSH_HOST, SSH_USER, DOMAIN, and runtime vars (GATEWAY_API_KEY, etc.)
-   ./ops.sh deploy-docker
-   ```
-4. **Domain**: Set `DOMAIN` in `.env` (e.g. `DOMAIN=ai-gateway.example.com`). docker-compose uses it for the Traefik Host rule.
-5. **n8n integration**: Set Base URL to `https://YOUR_DOMAIN/v1` (your Traefik host), Model to a route name from `config.yaml`, API Key to your `GATEWAY_API_KEY` value.
-
-### CI/CD (GitHub Actions + GHCR)
-
-Pushes to `main` run **`go test ./... -count=1`** in [`app/`](app/) first; if tests pass, the workflow builds the image on GitHub, pushes images to GHCR (`:main` and `:sha-<short>`), then SSHs into the VDS and runs `docker compose pull && docker compose up -d` in `/root/services/ai-gateway`.
-
-**Repository secrets (CI / deploy job)**
-
-| Secret | Purpose |
-|--------|---------|
-| `SSH_HOST` | VDS hostname or IP |
-| `SSH_USER` | SSH user |
-| `SSH_PRIVATE_KEY` | Private key (PEM) for that user |
-| `SSH_PORT` | Optional; defaults to `22` if omitted |
-| `GHCR_PULL_USER` | Optional; GitHub username for `docker login` on the VDS when the package is **private** |
-| `GHCR_PULL_TOKEN` | Optional; PAT with `read:packages` for that login |
-
-**Runtime on the VDS** (not stored in GitHub): a gitignored `config.yaml` and `.env` beside `docker-compose.yml`. The compose file pulls `ghcr.io/leshchenko1979/ai-gateway` tagged by `IMAGE_TAG` (default `main`). Set `GHCR_IMAGE` and `IMAGE_TAG` in the VDS `.env` if you use a fork or pin a digest tag.
-
-**Syncing config from your machine** without committing secrets: copy `config.yaml` and `.env` from the examples, fill them in, then run `./scripts/sync-config-to-vds.sh`. That uploads `docker-compose.yml`, `config.yaml`, and a filtered `.env` (SSH and `GHCR_PULL_*` lines are stripped so they are not left on the server), optionally runs `docker login` on the VDS when `GHCR_PULL_USER` and `GHCR_PULL_TOKEN` are set locally, then `docker compose pull && up -d`. In Cursor/VS Code, use **Tasks → Run Build Task** and choose **Sync config and env to VDS** (non-default build task).
-
-**Local Docker build** instead of pulling GHCR: add a gitignored `docker-compose.override.yml` that sets `build: { context: ., dockerfile: Dockerfile }` on `ai-gateway` and drop `image:` for local use.
-
-**CLI alternative to the VS Code sync task**: `./ops.sh deploy-docker` runs the same steps as `./scripts/sync-config-to-vds.sh`, then waits for the container. Use either the script or `ops.sh`; both match the current [`docker-compose.yml`](docker-compose.yml) (pulled image + `./config.yaml` mount).
-
-## Configuration
-
-The gateway uses YAML configuration with environment variable substitution:
+The gateway reads YAML with env var substitution. Start from [`config.yaml.example`](config.yaml.example).
 
 ```yaml
-api_key: ${GATEWAY_API_KEY}  # Gateway authentication key
-port: 8080                   # Optional, defaults to 8080
-default_step_timeout: 300s   # Optional global fallback for step_timeout
-default_route_timeout: 300s  # Optional global route budget
+api_key: ${GATEWAY_API_KEY}
+port: 8080
+default_step_timeout: 30s
+default_route_timeout: 300s
 
 providers:
   - name: cerebras
@@ -115,131 +68,76 @@ providers:
     base_url: https://openrouter.ai/api/v1
 
 routes:
-  - name: dynamic/n8n  # Exact model name match required
-    route_timeout: 10m  # Optional per-route budget override
+  - name: n8n-heavy
+    route_timeout: 5m
     steps:
       - provider: cerebras
         model: gpt-oss-120b
-        step_timeout: 5m  # Optional per-step call timeout
-        conflict_resolution: tools  # Remove response_format if tools present
+        step_timeout: 5m
+        conflict_resolution: tools
       - provider: openrouter
         model: nvidia/nemotron-3-nano-30b-a3b:free
         step_timeout: 5m
 ```
 
-You can put your API keys into `config.yaml` directly, but for security purposes it's better to store them in env vars and use them in `config.yaml`.
+Timeouts accept Go durations like `1s`, `30s`, `5m`, `2h` and must be greater than `0`.
 
-Timeout behavior:
-- Route budget resolution is `route_timeout -> default_route_timeout -> derived from step timeouts -> 30s`.
-- Step call timeout resolution is `step_timeout -> default_step_timeout -> 30s`.
-- If route budget is exceeded, execution stops immediately and returns `ROUTE_TIMEOUT` with partial routing summary.
-- Timeout values must be valid Go durations and strictly greater than `0` (for example `1s`, `5m`, `2h`).
+Config lookup order:
+1. `./config.yaml`
+2. `/etc/ai-gateway/config.yaml`
 
-**Configuration Locations:**
-1. `./config.yaml` (current directory)
-2. `/etc/ai-gateway/config.yaml` (system location)
+Missing `${VAR}` values fail startup with a clear list, and unknown YAML fields also fail startup.
 
-**Environment Variables:**
-- `GATEWAY_API_KEY`: Required for authentication
-- Provider API keys: `${PROVIDER_NAME}_API_KEY`
- - Missing `${VAR}` values cause startup errors with a clear list of missing vars
-- Unknown YAML fields fail startup validation (strict schema check).
+## API Cheat Sheet
 
-
-## API Endpoints
-
-### Authentication
-These endpoints do **not** require authentication:
-
+Unauthenticated:
 - `GET /health`
-- `GET /v1/diagnostics/upstream-models` — see [Diagnostics](#diagnostics)
+- `GET /v1/diagnostics/upstream-models`
 
-For all other routes (for example `GET /v1/models` and `POST /v1/chat/completions`), use `X-Api-Key` or `Authorization: Bearer <token>` with your configured gateway API key.
+Authenticated (`X-Api-Key` or `Authorization: Bearer`):
+- `GET /v1/models` returns route names
+- `POST /v1/chat/completions` uses the route name in `model`
 
-### Health Check
+Example chat endpoint:
+
 ```bash
-GET /health
-```
-Returns `{"status": "healthy"}` - no authentication required.
-
-### Diagnostics
-```bash
-GET /v1/diagnostics/upstream-models
-```
-No authentication. Calls each configured provider’s OpenAI-style `GET {base_url}/models` in parallel and returns JSON with an overall `ok` flag and per-provider results. Responds with **503** if any provider check fails, **200** if all succeed.
-
-**Security:** This route is unauthenticated and triggers outbound requests to provider APIs. Do not expose it on the public internet without network restrictions (for example reverse-proxy allowlists, VPN, or private ingress).
-
-### List Models
-```bash
-GET /v1/models
-Headers: X-Api-Key: <gateway-api-key> OR Authorization: Bearer <token>
-```
-Returns available route names from the configuration, which serve as the model names for requests.
-
-### Chat Completions
-```bash
-POST /v1/chat/completions
-Headers: X-Api-Key: <gateway-api-key> OR Authorization: Bearer <token>
-```
-Routes requests to providers. Set model to the desired route name.
-
-**Response with routing summary:**
-```json
-{
-  "id": "chatcmpl-...",
-  "object": "chat.completion",
-  "model": "dynamic/n8n",
-  "choices": [...],
-  "routing_summary": {
-    "route_name": "dynamic/n8n",
-    "steps": [
-      {"step_index": 0, "provider": "cerebras", "model": "gpt-oss-120b", "success": true, "duration_ms": 1234},
-      {"step_index": 1, "provider": "openrouter", "model": "nvidia/nemotron-3-nano-30b-a3b:free", "success": false, "duration_ms": 500, "error": "rate limit exceeded"}
-    ]
-  }
-}
+curl -X POST "http://localhost:8080/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_GATEWAY_API_KEY" \
+  -d '{
+    "model": "n8n-heavy",
+    "messages": [{"role":"user","content":"Hello"}]
+  }'
 ```
 
-The `routing_summary` field shows which route steps were attempted, which succeeded, and the timing in milliseconds for each step. Failed steps include the error message. Included in both successful responses and error responses when all steps fail.
+Responses include `routing_summary` so you can see which providers and steps were tried.
 
-## Service Management
-```bash
-sudo systemctl start ai-gateway     # Start service
-sudo systemctl stop ai-gateway      # Stop service
-sudo systemctl enable ai-gateway    # Enable auto-start
-sudo systemctl status ai-gateway    # Check status
-sudo journalctl -u ai-gateway -f    # View logs
-```
+Diagnostics warning: `/v1/diagnostics/upstream-models` is unauthenticated and performs outbound requests. Do not expose it publicly without network restrictions (allowlists, VPN, or private ingress).
 
-## Security & Logging
+## Other Ways To Run
 
-- **Security**: API key redaction, non-root execution, restrictive file permissions (600), TLS recommended
-- **Logging**: Structured JSON logs with request/response summaries, automatic key redaction
-- **Error Handling**: Sequential provider fallback on any error, detailed error messages with provider info
+Use [`ops.sh`](ops.sh):
 
-## Telemetry
+- Local binary build: `./ops.sh build`
+- Local systemd install: `./ops.sh install-service`
+- Remote systemd deploy over SSH: `./ops.sh deploy`
+- Binary-only install: `./ops.sh install`
 
-The gateway can send OpenTelemetry traces and logger events directly to any OTLP/HTTP-compliant collector. Configure the following environment variables to point at your observability backend (Grafana Cloud, Alloy, Tempo, or other OTLP destination):
+For systemd deployments, terminate TLS at a reverse proxy such as `nginx` or `traefik`.
 
-- `OTLP_ENDPOINT`: Full URL to the OTLP HTTP endpoint. Supports both `host:port` and full URLs like `https://otlp-gateway.example.com/otlp`.
-- `OTLP_API_KEY`: API key or token.
-    - For **Grafana Cloud**: You can use a standard `glc_` Access Policy Token. The gateway automatically extracts the Instance ID from the token and handles the required Basic authentication (`instanceID:apiKey`).
-    - For other collectors: It uses the provided key for Basic authentication (`apiKey:`).
-- `OTEL_SERVICE_NAME` (or `OTLP_SERVICE_NAME`): Optional. The service name (`ai-gateway`) used to group spans/logs.
-- `OTEL_RESOURCE_ATTRIBUTES` (or `OTLP_RESOURCE_ATTRIBUTES`): Optional. Comma-separated `key=value` pairs added to each resource (e.g., `deployment.environment=production`).
-- `OTLP_HEADERS` (optional): Optional. Extra headers in `Key=Value` CSV format.
+## Security and Telemetry
 
-### How it works
-The gateway uses the **OTLP HTTP exporter** for maximum compatibility (bypassing gRPC/ALPN issues). It automatically handles the `/v1/traces` signal path, ensuring that if you provide a base URL (like Grafana's `/otlp`), it still reaches the correct endpoint.
+- Security defaults include API key redaction, non-root execution, and restrictive file permissions.
+- Run behind TLS in production.
+- OpenTelemetry over OTLP/HTTP is supported via `OTLP_ENDPOINT`, `OTLP_API_KEY`, optional `OTEL_SERVICE_NAME` or `OTLP_SERVICE_NAME`, optional `OTEL_RESOURCE_ATTRIBUTES` or `OTLP_RESOURCE_ATTRIBUTES`, and optional `OTLP_HEADERS`.
+
+## Maintainer Notes
+
+CI/CD, GHCR, VDS deployment workflow, deploy secrets, and sync details are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Contributing
 
-Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and PR expectations. For **security-sensitive** issues, use the process in [SECURITY.md](SECURITY.md) instead of a public issue.
-
-## Reporting vulnerabilities
-
-See [SECURITY.md](SECURITY.md).
+Bug reports and pull requests are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md). For security-sensitive issues, follow [`SECURITY.md`](SECURITY.md).
 
 ## License
 

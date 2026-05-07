@@ -1,5 +1,11 @@
 # Recent Changes
 
+## README end-user refresh + maintainer docs move (2026-05-07)
+
+- **README focus shift:** Rewrote `README.md` to be end-user first: clear app integration contract (base URL, route-name model mapping, auth), Docker-first quick start, shorter config/API sections, and simplified deploy options.
+- **Maintainer detail relocation:** Moved CI/GHCR/VDS deployment specifics, secrets table, and sync script behavior into a new `CONTRIBUTING.md` maintainer section.
+- **Result:** README is now more approachable for operators and client integrators, while operational depth remains preserved in contributor docs.
+
 ## Timeout hardening and schema strictness (2026-05-07)
 
 - **Route vs step timeout correctness:** Fixed route-timeout classification so step-level request timeouts do not get mislabeled as `ROUTE_TIMEOUT`; fallback steps continue while route budget remains.
