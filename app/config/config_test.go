@@ -83,6 +83,43 @@ routes:
 	}
 }
 
+func TestLoadConfig_UnknownFieldsFail(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+	configData := `
+api_key: ${GATEWAY_API_KEY}
+default_timeout: 30s
+providers:
+  - name: test
+    api_key: ${PROVIDER_API_KEY}
+    base_url: https://example.com
+routes:
+  - name: test-route
+    steps:
+      - provider: test
+        model: test-model
+        timeout: 10s
+`
+	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	os.Setenv("GATEWAY_API_KEY", "test-gateway-key")
+	os.Setenv("PROVIDER_API_KEY", "test-provider-key")
+	defer func() {
+		os.Unsetenv("GATEWAY_API_KEY")
+		os.Unsetenv("PROVIDER_API_KEY")
+	}()
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("expected error for unknown legacy timeout fields, got nil")
+	}
+	if !strings.Contains(err.Error(), "field default_timeout not found") {
+		t.Fatalf("expected unknown field error for default_timeout, got: %v", err)
+	}
+}
+
 func TestFindEnvVars(t *testing.T) {
 	configData := `
 api_key: ${GATEWAY_API_KEY}
@@ -106,23 +143,18 @@ routes:
 	}
 }
 
-func TestGetTimeout(t *testing.T) {
-	// Test step timeout provided
-	timeout := GetTimeout("30s", "60s")
-	if timeout != 30*time.Second {
-		t.Errorf("Expected 30s, got %v", timeout)
+func TestGetStepTimeout(t *testing.T) {
+	if got := GetStepTimeout("30s", "60s"); got != 30*time.Second {
+		t.Fatalf("GetStepTimeout(\"30s\") = %v, want 30s", got)
 	}
-
-	// Test default timeout used when step timeout is empty
-	timeout2 := GetTimeout("", "60s")
-	if timeout2 != 60*time.Second {
-		t.Errorf("Expected default 60s, got %v", timeout2)
+	if got := GetStepTimeout("", "60s"); got != 60*time.Second {
+		t.Fatalf("GetStepTimeout(\"\", \"60s\") = %v, want 60s", got)
 	}
-
-	// Test fallback to 30s when both are empty
-	timeout3 := GetTimeout("", "")
-	if timeout3 != 30*time.Second {
-		t.Errorf("Expected fallback 30s, got %v", timeout3)
+	if got := GetStepTimeout("", ""); got != 30*time.Second {
+		t.Fatalf("GetStepTimeout(\"\", \"\") = %v, want 30s fallback", got)
+	}
+	if got := GetStepTimeout("nope", "60s"); got != 30*time.Second {
+		t.Fatalf("GetStepTimeout(\"nope\", \"60s\") = %v, want 30s fallback", got)
 	}
 }
 
@@ -135,8 +167,8 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				APIKey: "test-key",
-				DefaultTimeout: "30s",
+				APIKey:              "test-key",
+				DefaultRouteTimeout: "30s",
 				Providers: []Provider{
 					{Name: "test", APIKey: "key", BaseURL: "http://test.com"},
 				},
@@ -323,30 +355,369 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
-func TestGetDefaultTimeout(t *testing.T) {
+func TestMaxSequentialRouteDuration(t *testing.T) {
+	cfg := &Config{
+		DefaultRouteTimeout: "45s",
+		Routes: []Route{
+			{
+				Name: "short",
+				Steps: []RouteStep{
+					{Provider: "p1", Model: "m1", StepTimeout: "10s"},
+					{Provider: "p2", Model: "m2"},
+				},
+			},
+			{
+				Name: "long",
+				Steps: []RouteStep{
+					{Provider: "p1", Model: "m1", StepTimeout: "2m"},
+					{Provider: "p2", Model: "m2", StepTimeout: "30s"},
+				},
+			},
+		},
+	}
+
+	got := cfg.MaxSequentialRouteDuration()
+	want := 150 * time.Second
+	if got != want {
+		t.Fatalf("MaxSequentialRouteDuration() = %v, want %v", got, want)
+	}
+}
+
+func TestGetRouteTimeoutPrecedence(t *testing.T) {
+	cfg := &Config{
+		DefaultRouteTimeout: "90s",
+		Routes: []Route{
+			{
+				Name:         "with-override",
+				RouteTimeout: "40s",
+				Steps: []RouteStep{
+					{Provider: "p1", Model: "m1", StepTimeout: "5s"},
+				},
+			},
+			{
+				Name: "with-default",
+				Steps: []RouteStep{
+					{Provider: "p1", Model: "m1", StepTimeout: "5s"},
+				},
+			},
+		},
+	}
+	if got := cfg.GetRouteTimeout(cfg.Routes[0]); got != 40*time.Second {
+		t.Fatalf("route override precedence failed: got %v", got)
+	}
+	if got := cfg.GetRouteTimeout(cfg.Routes[1]); got != 90*time.Second {
+		t.Fatalf("global default precedence failed: got %v", got)
+	}
+}
+
+func TestGetRouteTimeoutFallbackToDerived(t *testing.T) {
+	cfg := &Config{
+		Routes: []Route{
+			{
+				Name: "derived",
+				Steps: []RouteStep{
+					{Provider: "p1", Model: "m1", StepTimeout: "20s"},
+					{Provider: "p2", Model: "m2", StepTimeout: "15s"},
+				},
+			},
+		},
+	}
+	if got := cfg.GetRouteTimeout(cfg.Routes[0]); got != 35*time.Second {
+		t.Fatalf("GetRouteTimeout() fallback derived = %v, want 35s", got)
+	}
+}
+
+func TestEffectiveHTTPServerTimeouts_UsesMaxEffectiveRouteBudget(t *testing.T) {
+	cfg := &Config{
+		DefaultRouteTimeout: "10m",
+		Routes: []Route{
+			{
+				Name: "route-a",
+				Steps: []RouteStep{
+					{Provider: "p1", Model: "m1"}, // falls back to 30s
+					{Provider: "p2", Model: "m2"}, // falls back to 30s
+				},
+			},
+		},
+	}
+
+	gotRead, gotWrite := cfg.EffectiveHTTPServerTimeouts()
+	if gotRead != 10*time.Minute || gotWrite != 10*time.Minute {
+		t.Fatalf("EffectiveHTTPServerTimeouts() = (%v, %v), want (%v, %v)", gotRead, gotWrite, 10*time.Minute, 10*time.Minute)
+	}
+}
+
+func TestEffectiveHTTPServerTimeouts(t *testing.T) {
 	tests := []struct {
-		name           string
-		defaultTimeout string
-		expected       time.Duration
+		name      string
+		cfg       *Config
+		wantRead  time.Duration
+		wantWrite time.Duration
 	}{
 		{
-			name:           "explicit timeout",
-			defaultTimeout: "60s",
-			expected:       60 * time.Second,
-		},
-		{
-			name:           "empty timeout",
-			defaultTimeout: "",
-			expected:       30 * time.Second,
+			name: "derived from worst route sum",
+			cfg: &Config{
+				Routes: []Route{
+					{
+						Name: "route-a",
+						Steps: []RouteStep{
+							{Provider: "p1", Model: "m1", StepTimeout: "10s"},
+							{Provider: "p2", Model: "m2"},
+						},
+					},
+					{
+						Name: "route-b",
+						Steps: []RouteStep{
+							{Provider: "p1", Model: "m1", StepTimeout: "40s"},
+							{Provider: "p2", Model: "m2"},
+						},
+					},
+				},
+			},
+			wantRead:  70 * time.Second,
+			wantWrite: 70 * time.Second,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := &Config{DefaultTimeout: tt.defaultTimeout}
-			result := config.GetDefaultTimeout()
-			if result != tt.expected {
-				t.Errorf("GetDefaultTimeout() = %v, want %v", result, tt.expected)
+			gotRead, gotWrite := tt.cfg.EffectiveHTTPServerTimeouts()
+			if gotRead != tt.wantRead || gotWrite != tt.wantWrite {
+				t.Fatalf("EffectiveHTTPServerTimeouts() = (%v, %v), want (%v, %v)", gotRead, gotWrite, tt.wantRead, tt.wantWrite)
+			}
+		})
+	}
+}
+
+func TestValidateConfig_InvalidDefaultRouteTimeout(t *testing.T) {
+	cfg := &Config{
+		APIKey:              "test-key",
+		DefaultRouteTimeout: "abc",
+		Providers: []Provider{
+			{Name: "test", APIKey: "key", BaseURL: "http://test.com"},
+		},
+		Routes: []Route{
+			{
+				Name: "test-model",
+				Steps: []RouteStep{
+					{Provider: "test", Model: "gpt-4"},
+				},
+			},
+		},
+	}
+
+	err := validateConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid default_route_timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "default_route_timeout") {
+		t.Fatalf("expected error to mention default_route_timeout, got: %v", err)
+	}
+}
+
+func TestValidateConfig_InvalidDefaultStepTimeout(t *testing.T) {
+	cfg := &Config{
+		APIKey:             "test-key",
+		DefaultStepTimeout: "abc",
+		Providers: []Provider{
+			{Name: "test", APIKey: "key", BaseURL: "http://test.com"},
+		},
+		Routes: []Route{
+			{
+				Name: "test-model",
+				Steps: []RouteStep{
+					{Provider: "test", Model: "gpt-4"},
+				},
+			},
+		},
+	}
+	err := validateConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid default_step_timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "default_step_timeout") {
+		t.Fatalf("expected error to mention default_step_timeout, got: %v", err)
+	}
+}
+
+func TestValidateConfig_InvalidRouteAndStepTimeout(t *testing.T) {
+	cfgRoute := &Config{
+		APIKey: "test-key",
+		Providers: []Provider{
+			{Name: "test", APIKey: "key", BaseURL: "http://test.com"},
+		},
+		Routes: []Route{
+			{
+				Name:         "test-model",
+				RouteTimeout: "xyz",
+				Steps: []RouteStep{
+					{Provider: "test", Model: "gpt-4"},
+				},
+			},
+		},
+	}
+	if err := validateConfig(cfgRoute); err == nil || !strings.Contains(err.Error(), "route_timeout") {
+		t.Fatalf("expected route_timeout validation error, got %v", err)
+	}
+
+	cfgStep := &Config{
+		APIKey: "test-key",
+		Providers: []Provider{
+			{Name: "test", APIKey: "key", BaseURL: "http://test.com"},
+		},
+		Routes: []Route{
+			{
+				Name: "test-model",
+				Steps: []RouteStep{
+					{Provider: "test", Model: "gpt-4", StepTimeout: "xyz"},
+				},
+			},
+		},
+	}
+	if err := validateConfig(cfgStep); err == nil || !strings.Contains(err.Error(), "step_timeout") {
+		t.Fatalf("expected step_timeout validation error, got %v", err)
+	}
+}
+
+func TestValidateTimeoutSettings(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *Config
+		wantErr string
+	}{
+		{
+			name: "valid timeouts",
+			cfg: &Config{
+				DefaultStepTimeout:  "20s",
+				DefaultRouteTimeout: "2m",
+				Routes: []Route{
+					{
+						Name:         "ok",
+						RouteTimeout: "90s",
+						Steps: []RouteStep{
+							{Provider: "p1", Model: "m1", StepTimeout: "5s"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:    "invalid default route timeout",
+			cfg:     &Config{DefaultRouteTimeout: "bad"},
+			wantErr: "default_route_timeout",
+		},
+		{
+			name:    "invalid default step timeout",
+			cfg:     &Config{DefaultStepTimeout: "bad"},
+			wantErr: "default_step_timeout",
+		},
+		{
+			name: "invalid route timeout",
+			cfg: &Config{
+				Routes: []Route{{Name: "r1", RouteTimeout: "bad"}},
+			},
+			wantErr: "route_timeout",
+		},
+		{
+			name: "invalid step timeout",
+			cfg: &Config{
+				Routes: []Route{
+					{
+						Name:  "r1",
+						Steps: []RouteStep{{Provider: "p1", Model: "m1", StepTimeout: "bad"}},
+					},
+				},
+			},
+			wantErr: "step_timeout",
+		},
+		{
+			name:    "non-positive default route timeout",
+			cfg:     &Config{DefaultRouteTimeout: "0s"},
+			wantErr: "duration must be > 0",
+		},
+		{
+			name:    "non-positive default step timeout",
+			cfg:     &Config{DefaultStepTimeout: "-1s"},
+			wantErr: "duration must be > 0",
+		},
+		{
+			name: "non-positive route timeout",
+			cfg: &Config{
+				Routes: []Route{{Name: "r1", RouteTimeout: "0s"}},
+			},
+			wantErr: "duration must be > 0",
+		},
+		{
+			name: "non-positive step timeout",
+			cfg: &Config{
+				Routes: []Route{
+					{
+						Name:  "r1",
+						Steps: []RouteStep{{Provider: "p1", Model: "m1", StepTimeout: "-1s"}},
+					},
+				},
+			},
+			wantErr: "duration must be > 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTimeoutSettings(tt.cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateTimeoutSettings() unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateTimeoutSettings() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestEffectiveHTTPServerTimeouts_DerivedFloorAndLargeBudget(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want time.Duration
+	}{
+		{
+			name: "floor applies for tiny derived sum",
+			cfg: &Config{
+				Routes: []Route{
+					{
+						Name: "tiny",
+						Steps: []RouteStep{
+							{Provider: "p1", Model: "m1", StepTimeout: "1s"},
+						},
+					},
+				},
+			},
+			want: 30 * time.Second,
+		},
+		{
+			name: "large derived sum is preserved",
+			cfg: &Config{
+				Routes: []Route{
+					{
+						Name: "huge",
+						Steps: []RouteStep{
+							{Provider: "p1", Model: "m1", StepTimeout: "25h"},
+						},
+					},
+				},
+			},
+			want: 25 * time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRead, gotWrite := tt.cfg.EffectiveHTTPServerTimeouts()
+			if gotRead != tt.want || gotWrite != tt.want {
+				t.Fatalf("EffectiveHTTPServerTimeouts() = (%v, %v), want (%v, %v)", gotRead, gotWrite, tt.want, tt.want)
 			}
 		})
 	}

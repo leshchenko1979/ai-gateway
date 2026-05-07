@@ -7,7 +7,6 @@ import (
 
 	"ai-gateway/config"
 	"ai-gateway/logger"
-	"ai-gateway/providers"
 )
 
 func TestAuthMiddleware(t *testing.T) {
@@ -15,9 +14,9 @@ func TestAuthMiddleware(t *testing.T) {
 		APIKey: "test-api-key",
 		Port:   8080,
 	}
-	logger := logger.NewLogger()
-	manager := providers.NewManager([]config.Provider{}, []config.Route{}, logger)
-	srv := NewServer(cfg, logger, manager)
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, &config.Config{Providers: []config.Provider{}, Routes: []config.Route{}}, log)
+	srv := mustNewServer(t, cfg, log, manager)
 
 	tests := []struct {
 		name           string

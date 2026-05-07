@@ -103,7 +103,8 @@ The gateway uses YAML configuration with environment variable substitution:
 ```yaml
 api_key: ${GATEWAY_API_KEY}  # Gateway authentication key
 port: 8080                   # Optional, defaults to 8080
-default_timeout: 300s        # Example; omit for built-in default 30s
+default_step_timeout: 300s   # Optional global fallback for step_timeout
+default_route_timeout: 300s  # Optional global route budget
 
 providers:
   - name: cerebras
@@ -115,15 +116,23 @@ providers:
 
 routes:
   - name: dynamic/n8n  # Exact model name match required
+    route_timeout: 10m  # Optional per-route budget override
     steps:
       - provider: cerebras
         model: gpt-oss-120b
+        step_timeout: 5m  # Optional per-step call timeout
         conflict_resolution: tools  # Remove response_format if tools present
       - provider: openrouter
         model: nvidia/nemotron-3-nano-30b-a3b:free
+        step_timeout: 5m
 ```
 
 You can put your API keys into `config.yaml` directly, but for security purposes it's better to store them in env vars and use them in `config.yaml`.
+
+Timeout behavior:
+- Route budget resolution is `route_timeout -> default_route_timeout -> derived from step timeouts -> 30s`.
+- Step call timeout resolution is `step_timeout -> default_step_timeout -> 30s`.
+- If route budget is exceeded, execution stops immediately and returns `ROUTE_TIMEOUT` with partial routing summary.
 
 **Configuration Locations:**
 1. `./config.yaml` (current directory)

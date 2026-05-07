@@ -105,7 +105,10 @@ Rename `providers.yaml` to `config.yaml` to reflect broader scope.
 ## Timeout Handling
 
 ### Decision
-Implement hierarchical timeout resolution: step timeout → default timeout → 30s fallback.
+Implement explicit multi-level timeout semantics:
+- `step_timeout` for individual provider attempts,
+- `route_timeout` for route-level execution budget,
+- `default_route_timeout` as global route budget fallback.
 
 ### Context
 - Different providers may need different timeouts
@@ -131,6 +134,12 @@ Implement hierarchical timeout resolution: step timeout → default timeout → 
 - **Sensible defaults**: 30s fallback prevents infinite hangs
 - **Configuration simplicity**: Most routes can use default timeout
 - **Provider independence**: Timeouts not tied to provider definitions
+
+### Follow-up Update (2026-05-07)
+- Final naming: `default_route_timeout`, `route_timeout`, `step_timeout` (breaking migration for user clarity).
+- Route timeout is now enforced in manager execution logic with `context.WithTimeout`, producing structured `ROUTE_TIMEOUT` errors with partial step summaries.
+- Provider requests are context-bound (`http.NewRequestWithContext`) so route timeout cancels in-flight upstream calls.
+- HTTP server read/write timeouts remain derived from route step totals (clamped) to avoid premature server cutoff.
 
 ## Multimodal Message Support
 

@@ -3,11 +3,15 @@
 ## Core Modules
 
 ### Configuration System (`config/`)
-- **`types.go`**: Data structures for Config, Provider, Route, RouteStep
+- **`types.go`**: Data structures for Config, Provider, Route, RouteStep (`default_route_timeout`, `route_timeout`, `step_timeout`)
 - **`config.go`**: YAML loading with env var substitution and validation
 - **Key Functions**:
   - `LoadConfig()`: Loads and validates configuration
-  - `GetTimeout()`: Resolves timeout from step or default
+  - `ValidateTimeoutSettings()`: Reusable timeout validation for both file-loaded and programmatic configs
+  - `GetStepTimeout()`: Resolves per-step timeout (`step_timeout` -> 30s fallback)
+  - `GetRouteTimeout()`: Resolves route budget (`route_timeout` -> `default_route_timeout` -> derived/fallback)
+  - `MaxSequentialRouteDuration()`: Computes worst-case per-request route duration by summing step timeouts per route and taking max route sum
+  - `EffectiveHTTPServerTimeouts()`: Derives server read/write timeout from route step totals (floor/ceiling)
   - Route/provider validation with cross-reference checking
 - **Ops**: Task **Verify provider model lists** runs `go run ./cmd/check-models` from `app/` (see `.vscode/tasks.json`) to confirm each provider’s upstream `/models` endpoint.
 
@@ -16,13 +20,15 @@
 - **`client.go`**: HTTP client with conflict resolution
 - **Key Functions**:
   - `Manager.GetRoute()`: Exact model name matching
-  - `Manager.ExecuteWithTracing()`: Sequential route step execution
+  - `Manager.ExecuteWithTracing()`: Sequential route step execution with route-scoped timeout context
+  - `NewManager(cfg, ...)`: Uses config-level timeout policy (`default_route_timeout`, `route_timeout`, `step_timeout`)
   - `Client.applyConflictResolution()`: Request field manipulation
 
 ### Server Layer (`server/`)
 - **`handlers.go`**: HTTP request/response handling
 - **`server.go`**: Server setup and routing
 - **Key Functions**:
+  - `NewServer()`: Uses config-derived effective read/write timeout instead of fixed 30s
   - `handleChatCompletions()`: Main request processing
   - `handleUpstreamModelsCheck()`: `GET /v1/diagnostics/upstream-models` — unauthenticated; validates each provider’s upstream models API (same as CLI check)
   - Route lookup and error handling

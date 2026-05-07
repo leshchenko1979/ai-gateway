@@ -62,10 +62,10 @@ func TestChatRequest_ReplacesOnlyModel(t *testing.T) {
 
 	// Verify all original fields are preserved
 	expectedFields := map[string]interface{}{
-		"temperature":  0.7,
-		"max_tokens":   float64(100),
-		"stream":       false,
-		"custom_field": "preserved",
+		"temperature":   0.7,
+		"max_tokens":    float64(100),
+		"stream":        false,
+		"custom_field":  "preserved",
 		"another_field": float64(42),
 	}
 

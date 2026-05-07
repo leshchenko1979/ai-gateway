@@ -1,12 +1,14 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"ai-gateway/config"
 	"ai-gateway/logger"
@@ -71,12 +73,12 @@ func TestClient_Call(t *testing.T) {
 		BaseURL: server.URL,
 	}
 	step := config.RouteStep{
-		Provider: "test-provider",
-		Model:    "gpt-4",
-		Timeout:  "30s",
+		Provider:    "test-provider",
+		Model:       "gpt-4",
+		StepTimeout: "30s",
 	}
 	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, logger)
+	client := NewClientWithRouteStep(cfg, step, "30s", logger)
 
 	// Test call - create request from JSON
 	requestJSON := `{"model":"original-model","messages":[{"role":"user","content":"Hello"}]}`
@@ -85,7 +87,7 @@ func TestClient_Call(t *testing.T) {
 		t.Fatalf("Failed to unmarshal test request: %v", err)
 	}
 
-	response, err := client.Call(request)
+	response, err := client.Call(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -199,12 +201,12 @@ func TestClient_Call_ReplacesOnlyModel(t *testing.T) {
 		BaseURL: server.URL,
 	}
 	step := config.RouteStep{
-		Provider: "test-provider",
-		Model:    "gpt-4",
-		Timeout:  "30s",
+		Provider:    "test-provider",
+		Model:       "gpt-4",
+		StepTimeout: "30s",
 	}
 	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, logger)
+	client := NewClientWithRouteStep(cfg, step, "30s", logger)
 
 	// Create request with many fields
 	requestJSON := `{
@@ -222,7 +224,7 @@ func TestClient_Call_ReplacesOnlyModel(t *testing.T) {
 	}
 
 	// Call should succeed and replace only the model
-	response, err := client.Call(request)
+	response, err := client.Call(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -332,11 +334,11 @@ func TestClient_ConflictResolution_Tools(t *testing.T) {
 	step := config.RouteStep{
 		Provider:           "test-provider",
 		Model:              "gpt-4",
-		Timeout:            "30s",
+		StepTimeout:        "30s",
 		ConflictResolution: "tools",
 	}
 	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, logger)
+	client := NewClientWithRouteStep(cfg, step, "30s", logger)
 
 	// Create request with both tools and response_format
 	requestJSON := `{"model":"original","messages":[{"role":"user","content":"Hello"}],"tools":[{"function":{"name":"test"}}],"response_format":{"type":"json_object"}}`
@@ -345,7 +347,7 @@ func TestClient_ConflictResolution_Tools(t *testing.T) {
 		t.Fatalf("Failed to unmarshal test request: %v", err)
 	}
 
-	_, err := client.Call(request)
+	_, err := client.Call(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -404,11 +406,11 @@ func TestClient_ConflictResolution_Format(t *testing.T) {
 	step := config.RouteStep{
 		Provider:           "test-provider",
 		Model:              "gpt-4",
-		Timeout:            "30s",
+		StepTimeout:        "30s",
 		ConflictResolution: "format",
 	}
 	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, logger)
+	client := NewClientWithRouteStep(cfg, step, "30s", logger)
 
 	// Create request with both tools and response_format
 	requestJSON := `{"model":"original","messages":[{"role":"user","content":"Hello"}],"tools":[{"function":{"name":"test"}}],"response_format":{"type":"json_object"}}`
@@ -417,8 +419,25 @@ func TestClient_ConflictResolution_Format(t *testing.T) {
 		t.Fatalf("Failed to unmarshal test request: %v", err)
 	}
 
-	_, err := client.Call(request)
+	_, err := client.Call(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
+	}
+}
+
+func TestNewClientWithRouteStep_UsesFallbackWhenStepTimeoutEmpty(t *testing.T) {
+	cfg := config.Provider{
+		Name:    "test-provider",
+		APIKey:  "test-api-key",
+		BaseURL: "https://example.com",
+	}
+	step := config.RouteStep{
+		Provider: "test-provider",
+		Model:    "gpt-4",
+	}
+
+	client := NewClientWithRouteStep(cfg, step, "2m", logger.NewLogger())
+	if client.client.Timeout != 2*time.Minute {
+		t.Fatalf("client timeout = %v, want %v", client.client.Timeout, 2*time.Minute)
 	}
 }

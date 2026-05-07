@@ -1,6 +1,7 @@
 api_key: ${GATEWAY_API_KEY} # Missing env vars fail fast at startup
 port: 8080
-default_timeout: 300s
+default_step_timeout: 30s
+default_route_timeout: 300s
 
 providers:
   - name: cerebras
@@ -24,3 +25,14 @@ routes:
     steps:
       - provider: openrouter
         model: nvidia/nemotron-3-nano-30b-a3b:free
+
+  - name: n8n-heavy
+    route_timeout: 5m
+    steps:
+      - provider: cerebras
+        model: gpt-oss-120b
+        step_timeout: 5m
+        conflict_resolution: tools
+      - provider: openrouter
+        model: nvidia/nemotron-3-nano-30b-a3b:free
+        step_timeout: 5m

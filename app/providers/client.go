@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,9 +44,9 @@ func NewClient(cfg config.Provider, logger *logger.Logger) *Client {
 }
 
 // NewClientWithRouteStep creates a provider client configured for a specific route step
-func NewClientWithRouteStep(providerCfg config.Provider, step config.RouteStep, logger *logger.Logger) *Client {
+func NewClientWithRouteStep(providerCfg config.Provider, step config.RouteStep, defaultStepTimeout string, logger *logger.Logger) *Client {
 	// Get timeout from step or use default
-	timeout := config.GetTimeout(step.Timeout, "30s") // Default to 30s if no default configured
+	timeout := config.GetStepTimeout(step.StepTimeout, defaultStepTimeout)
 
 	return &Client{
 		name:               providerCfg.Name,
@@ -73,7 +74,7 @@ func (c *Client) IsAvailable() bool {
 }
 
 // Call executes a chat completion request
-func (c *Client) Call(request types.ChatRequest) (*types.ChatResponse, error) {
+func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.ChatResponse, error) {
 	// Override model with provider's configured model
 	request.Model = c.model
 
@@ -92,7 +93,7 @@ func (c *Client) Call(request types.ChatRequest) (*types.ChatResponse, error) {
 
 	// Create HTTP request
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

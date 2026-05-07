@@ -1,5 +1,20 @@
 # Recent Changes
 
+## Timeout validation consistency hardening (2026-05-07)
+
+- Added shared `ValidateTimeoutSettings()` in `config` and reused it in full config validation.
+- `providers.NewManager` and `server.NewServer` now fail fast on invalid timeout strings in programmatic configs, preventing silent runtime fallback differences.
+- Added focused tests for timeout-only validation coverage.
+
+## True route timeout + naming alignment (2026-05-07)
+
+- **Config behavior:** Switched to user-facing timeout names: `default_route_timeout`, `route_timeout`, and `step_timeout` (breaking config change). Invalid route/step timeout strings fail config validation.
+- **True route deadline:** Route execution now uses context deadline in manager logic, stopping retries immediately when route budget is exceeded.
+- **Provider call cancellation:** Outbound provider requests now use context-bound HTTP requests so route deadline cancellation interrupts in-flight calls.
+- **Error shape:** Added structured `ROUTE_TIMEOUT` responses with partial routing summary and step errors collected up to timeout.
+- **Server timeout behavior:** HTTP server read/write timeouts remain derived from route step totals; route budget is now enforced primarily by manager route context.
+- **Tests/docs:** Added coverage for route-timeout precedence and `ROUTE_TIMEOUT` response path; updated README and `config.yaml.example` to the new naming.
+
 ## README and public-repo docs (2026-03-28)
 
 - **README:** CI test command (`-count=1`), GHCR tags, Go 1.25+ requirement, binary size (~13MB), `default_timeout` example vs default 30s, correct unauthenticated routes (`/health`, `/v1/diagnostics/upstream-models`) with diagnostics section and security note, fork-friendly n8n Base URL placeholder, workflow badge, links to contributing/security docs.

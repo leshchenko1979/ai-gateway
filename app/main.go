@@ -33,10 +33,16 @@ func main() {
 
 	// Create logger and provider manager
 	logger := logger.NewLogger()
-	manager := providers.NewManager(cfg.Providers, cfg.Routes, logger)
+	manager, err := providers.NewManager(cfg, logger)
+	if err != nil {
+		log.Fatalf("Failed to create provider manager: %v", err)
+	}
 
 	// Create and start server
-	srv := server.NewServer(cfg, logger, manager)
+	srv, err := server.NewServer(cfg, logger, manager)
+	if err != nil {
+		log.Fatalf("Failed to create server: %v", err)
+	}
 	fmt.Printf("Starting AI Gateway on port %d\n", cfg.Port)
 
 	if err := srv.Start(); err != nil {

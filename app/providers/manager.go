@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,28 +17,43 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+var ErrRouteNotFound = errors.New("route not found")
+
 // Manager handles route-based execution of providers
 type Manager struct {
 	providers map[string]config.Provider // provider name -> provider config
 	routes    []config.Route
+	config    *config.Config
 	logger    *logger.Logger
 	tracer    trace.Tracer
 }
 
-// NewManager creates a new provider manager
-func NewManager(providers []config.Provider, routes []config.Route, logger *logger.Logger) *Manager {
+// NewManager creates a new provider manager.
+func NewManager(cfg *config.Config, logger *logger.Logger) (*Manager, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	if logger == nil {
+		return nil, fmt.Errorf("logger is nil")
+	}
+
+	if err := config.ValidateTimeoutSettings(cfg); err != nil {
+		return nil, fmt.Errorf("invalid timeout settings: %w", err)
+	}
+
 	// Build provider map for quick lookup
 	providerMap := make(map[string]config.Provider)
-	for _, provider := range providers {
+	for _, provider := range cfg.Providers {
 		providerMap[provider.Name] = provider
 	}
 
 	return &Manager{
 		providers: providerMap,
-		routes:    routes,
+		routes:    cfg.Routes,
+		config:    cfg,
 		logger:    logger,
 		tracer:    telemetry.Tracer("ai-gateway.providers"),
-	}
+	}, nil
 }
 
 // GetRoute finds a route by exact model name match
@@ -47,7 +63,7 @@ func (m *Manager) GetRoute(model string) (*config.Route, error) {
 			return &route, nil
 		}
 	}
-	return nil, fmt.Errorf("no route found for model '%s'", model)
+	return nil, fmt.Errorf("%w for model '%s'", ErrRouteNotFound, model)
 }
 
 // Execute runs the request through the route for the model until one succeeds
@@ -74,11 +90,23 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 	}
 	defer routeSpan.End()
 
+	routeTimeout := m.config.GetRouteTimeout(*route)
+	routeStart := time.Now()
+	routeCtx, cancel := context.WithTimeout(rootCtx, routeTimeout)
+	defer cancel()
+
 	var stepErrors []types.RouteStepError
 	var stepResults []types.RouteStepResult
 
 	// Try each step in the route
 	for stepIndex, step := range route.Steps {
+		if routeErr := routeCtx.Err(); routeErr != nil {
+			if isRouteDeadlineExceeded(routeCtx) {
+				return nil, m.newRouteTimeoutError(*route, routeTimeout, time.Since(routeStart), stepErrors, stepResults)
+			}
+			return nil, routeErr
+		}
+
 		// Get provider config
 		providerCfg, exists := m.providers[step.Provider]
 		if !exists {
@@ -99,7 +127,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 
 		m.logger.Info("Trying route step", fields)
 
-		_, stepSpan := m.tracer.Start(rootCtx, fmt.Sprintf("route.%s.step.%d", route.Name, stepIndex),
+		_, stepSpan := m.tracer.Start(routeCtx, fmt.Sprintf("route.%s.step.%d", route.Name, stepIndex),
 			trace.WithAttributes(
 				attribute.String("step.provider", step.Provider),
 				attribute.String("step.model", step.Model),
@@ -110,8 +138,8 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 
 		start := time.Now()
 		// Create provider client on-demand with route step configuration
-		provider := NewClientWithRouteStep(providerCfg, step, m.logger)
-		response, err := provider.Call(request)
+		provider := NewClientWithRouteStep(providerCfg, step, m.config.DefaultStepTimeout, m.logger)
+		response, err := provider.Call(routeCtx, request)
 		duration := time.Since(start)
 
 		stepSpan.SetAttributes(attribute.Int64("step.duration_ms", duration.Milliseconds()))
@@ -151,6 +179,12 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 				Error:      err.Error(),
 			})
 			stepSpan.End()
+			if isRouteDeadlineExceeded(routeCtx) {
+				return nil, m.newRouteTimeoutError(*route, routeTimeout, time.Since(routeStart), stepErrors, stepResults)
+			}
+			if isRouteCanceled(err, routeCtx) {
+				return nil, context.Canceled
+			}
 			continue
 		}
 
@@ -208,4 +242,26 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 		RoutingSummary: routingSummary,
 	}
 	return nil, routeError
+}
+
+func (m *Manager) newRouteTimeoutError(route config.Route, routeTimeout, elapsed time.Duration, stepErrors []types.RouteStepError, stepResults []types.RouteStepResult) types.RouteTimeoutError {
+	routingSummary := &types.RoutingSummary{
+		RouteName: route.Name,
+		Steps:     stepResults,
+	}
+	return types.RouteTimeoutError{
+		Route:          route,
+		TimeoutMs:      routeTimeout.Milliseconds(),
+		ElapsedMs:      elapsed.Milliseconds(),
+		Errors:         stepErrors,
+		RoutingSummary: routingSummary,
+	}
+}
+
+func isRouteDeadlineExceeded(routeCtx context.Context) bool {
+	return errors.Is(routeCtx.Err(), context.DeadlineExceeded)
+}
+
+func isRouteCanceled(err error, routeCtx context.Context) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(routeCtx.Err(), context.Canceled)
 }

@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"ai-gateway/config"
 	"ai-gateway/logger"
@@ -13,11 +15,29 @@ import (
 	"ai-gateway/types"
 )
 
+func mustNewProviderManager(t *testing.T, cfg *config.Config, log *logger.Logger) *providers.Manager {
+	t.Helper()
+	manager, err := providers.NewManager(cfg, log)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	return manager
+}
+
+func mustNewServer(t *testing.T, cfg *config.Config, log *logger.Logger, manager *providers.Manager) *Server {
+	t.Helper()
+	srv, err := NewServer(cfg, log, manager)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	return srv
+}
+
 func TestHandleHealth(t *testing.T) {
 	cfg := &config.Config{APIKey: "test-key", Port: 8080}
-	logger := logger.NewLogger()
-	manager := providers.NewManager([]config.Provider{}, []config.Route{}, logger)
-	srv := NewServer(cfg, logger, manager)
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, &config.Config{Providers: []config.Provider{}, Routes: []config.Route{}}, log)
+	srv := mustNewServer(t, cfg, log, manager)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	rr := httptest.NewRecorder()
@@ -49,9 +69,9 @@ func TestHandleUpstreamModelsCheck(t *testing.T) {
 		{Name: "p1", APIKey: "secret", BaseURL: ts.URL + "/v1"},
 	}
 	cfg := &config.Config{APIKey: "test-key", Port: 8080, Providers: providersList}
-	logger := logger.NewLogger()
-	manager := providers.NewManager(providersList, []config.Route{}, logger)
-	srv := NewServer(cfg, logger, manager)
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, &config.Config{Providers: providersList, Routes: []config.Route{}}, log)
+	srv := mustNewServer(t, cfg, log, manager)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/diagnostics/upstream-models", nil)
 	rr := httptest.NewRecorder()
@@ -86,9 +106,9 @@ func TestHandleModels(t *testing.T) {
 		{Name: "test-route-2"},
 	}
 	cfg := &config.Config{APIKey: "test-key", Port: 8080, Routes: routes}
-	logger := logger.NewLogger()
-	manager := providers.NewManager([]config.Provider{}, routes, logger)
-	srv := NewServer(cfg, logger, manager)
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, &config.Config{Providers: []config.Provider{}, Routes: routes}, log)
+	srv := mustNewServer(t, cfg, log, manager)
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	req.Header.Set("X-Api-Key", "test-key")
@@ -132,9 +152,9 @@ func TestHandleChatCompletions_AllStepsFail(t *testing.T) {
 	}
 
 	cfg := &config.Config{APIKey: "test-key", Port: 8080}
-	logger := logger.NewLogger()
-	manager := providers.NewManager(providersList, routes, logger)
-	srv := NewServer(cfg, logger, manager)
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, &config.Config{Providers: providersList, Routes: routes}, log)
+	srv := mustNewServer(t, cfg, log, manager)
 
 	requestBody := `{"model":"test-model","messages":[{"role":"user","content":"Hello"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody))
@@ -215,5 +235,140 @@ func TestHandleChatCompletions_AllStepsFail(t *testing.T) {
 	}
 	if stepErr["error"] == "" {
 		t.Error("Expected non-empty error message")
+	}
+}
+
+func TestHandleChatCompletions_RouteTimeout(t *testing.T) {
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer slowServer.Close()
+
+	providersList := []config.Provider{
+		{Name: "provider1", APIKey: "key1", BaseURL: slowServer.URL},
+	}
+	routes := []config.Route{
+		{
+			Name:         "timeout-model",
+			RouteTimeout: "50ms",
+			Steps: []config.RouteStep{
+				{Provider: "provider1", Model: "gpt-4", StepTimeout: "2s"},
+			},
+		},
+	}
+
+	cfg := &config.Config{
+		APIKey:    "test-key",
+		Port:      8080,
+		Providers: providersList,
+		Routes:    routes,
+	}
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, cfg, log)
+	srv := mustNewServer(t, cfg, log, manager)
+
+	requestBody := `{"model":"timeout-model","messages":[{"role":"user","content":"Hello"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "test-key")
+	rr := httptest.NewRecorder()
+
+	srv.handleChatCompletions(rr, req)
+
+	if rr.Code != http.StatusGatewayTimeout {
+		t.Fatalf("Expected status 504, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var errorResp types.ErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errorResp); err != nil {
+		t.Fatalf("Expected JSON ErrorResponse, got error: %v", err)
+	}
+	if errorResp.Error.Code != "ROUTE_TIMEOUT" {
+		t.Fatalf("Expected error code ROUTE_TIMEOUT, got %s", errorResp.Error.Code)
+	}
+}
+
+func TestHandleChatCompletions_RouteNotFound(t *testing.T) {
+	cfg := &config.Config{
+		APIKey: "test-key",
+		Port:   8080,
+		Providers: []config.Provider{
+			{Name: "provider1", APIKey: "key1", BaseURL: "http://example.com"},
+		},
+		Routes: []config.Route{
+			{
+				Name: "configured-model",
+				Steps: []config.RouteStep{
+					{Provider: "provider1", Model: "gpt-4"},
+				},
+			},
+		},
+	}
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, cfg, log)
+	srv := mustNewServer(t, cfg, log, manager)
+
+	requestBody := `{"model":"missing-model","messages":[{"role":"user","content":"Hello"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "test-key")
+	rr := httptest.NewRecorder()
+
+	srv.handleChatCompletions(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("Expected status 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var errorResp types.ErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errorResp); err != nil {
+		t.Fatalf("Expected JSON ErrorResponse, got error: %v", err)
+	}
+	if errorResp.Error.Code != "ROUTE_NOT_FOUND" {
+		t.Fatalf("Expected error code ROUTE_NOT_FOUND, got %s", errorResp.Error.Code)
+	}
+}
+
+func TestHandleChatCompletions_ClientCanceled(t *testing.T) {
+	cfg := &config.Config{
+		APIKey: "test-key",
+		Port:   8080,
+		Providers: []config.Provider{
+			{Name: "provider1", APIKey: "key1", BaseURL: "http://example.com"},
+		},
+		Routes: []config.Route{
+			{
+				Name: "cancel-model",
+				Steps: []config.RouteStep{
+					{Provider: "provider1", Model: "gpt-4"},
+				},
+			},
+		},
+	}
+	log := logger.NewLogger()
+	manager := mustNewProviderManager(t, cfg, log)
+	srv := mustNewServer(t, cfg, log, manager)
+
+	requestBody := `{"model":"cancel-model","messages":[{"role":"user","content":"Hello"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "test-key")
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	srv.handleChatCompletions(rr, req)
+
+	if rr.Code != http.StatusRequestTimeout {
+		t.Fatalf("Expected status 408, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var errorResp types.ErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errorResp); err != nil {
+		t.Fatalf("Expected JSON ErrorResponse, got error: %v", err)
+	}
+	if errorResp.Error.Code != "CLIENT_CANCELED" {
+		t.Fatalf("Expected error code CLIENT_CANCELED, got %s", errorResp.Error.Code)
 	}
 }

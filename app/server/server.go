@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"time"
 
 	"ai-gateway/config"
 	"ai-gateway/logger"
@@ -24,8 +23,22 @@ type Server struct {
 	httpSrv *http.Server
 }
 
-// NewServer creates a new server instance
-func NewServer(cfg *config.Config, logger *logger.Logger, manager *providers.Manager) *Server {
+// NewServer creates a new server instance.
+func NewServer(cfg *config.Config, logger *logger.Logger, manager *providers.Manager) (*Server, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	if logger == nil {
+		return nil, fmt.Errorf("logger is nil")
+	}
+	if manager == nil {
+		return nil, fmt.Errorf("manager is nil")
+	}
+
+	if err := config.ValidateTimeoutSettings(cfg); err != nil {
+		return nil, fmt.Errorf("invalid timeout settings: %w", err)
+	}
+
 	srv := &Server{
 		config:  cfg,
 		logger:  logger,
@@ -33,17 +46,18 @@ func NewServer(cfg *config.Config, logger *logger.Logger, manager *providers.Man
 	}
 
 	mux := srv.setupRoutes()
+	readTimeout, writeTimeout := cfg.EffectiveHTTPServerTimeouts()
 	srv.httpSrv = &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: mux,
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
 	}
 
-	return srv
+	return srv, nil
 }
 
 // setupRoutes configures HTTP routes
@@ -80,9 +94,9 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 // Start starts the HTTPS server
 func (s *Server) Start() error {
 	s.logger.Info("Starting server", map[string]interface{}{
-		"port":       s.config.Port,
-		"providers":  len(s.config.Providers),
-		"routes":     len(s.config.Routes),
+		"port":      s.config.Port,
+		"providers": len(s.config.Providers),
+		"routes":    len(s.config.Routes),
 		"route_names": func(routes []config.Route) []string {
 			names := make([]string, 0, len(routes))
 			for _, route := range routes {

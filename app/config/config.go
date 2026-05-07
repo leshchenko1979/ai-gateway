@@ -45,7 +45,9 @@ func LoadConfig(filename string) (*Config, error) {
 	}
 
 	var config Config
-	if err := yaml.Unmarshal([]byte(expanded), &config); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(expanded))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
@@ -59,11 +61,6 @@ func LoadConfig(filename string) (*Config, error) {
 		if config.Port == 0 {
 			config.Port = 8080
 		}
-	}
-
-	// Set default timeout if not specified
-	if config.DefaultTimeout == "" {
-		config.DefaultTimeout = "30s"
 	}
 
 	// Validate configuration
@@ -153,6 +150,9 @@ func validateConfig(cfg *Config) error {
 	if len(cfg.Providers) == 0 {
 		return fmt.Errorf("at least one provider must be configured")
 	}
+	if err := ValidateTimeoutSettings(cfg); err != nil {
+		return err
+	}
 
 	// Build provider name map for route validation
 	providerNames := make(map[string]bool)
@@ -183,7 +183,6 @@ func validateConfig(cfg *Config) error {
 		if len(route.Steps) == 0 {
 			return fmt.Errorf("route[%d] (%s): at least one step must be configured", i, route.Name)
 		}
-
 		// Validate route steps
 		for j, step := range route.Steps {
 			if strings.TrimSpace(step.Provider) == "" {
@@ -196,12 +195,6 @@ func validateConfig(cfg *Config) error {
 			if !providerNames[step.Provider] {
 				return fmt.Errorf("route[%d] (%s) step[%d]: provider '%s' not found in providers list", i, route.Name, j, step.Provider)
 			}
-			// Validate timeout if provided
-			if step.Timeout != "" {
-				if _, err := time.ParseDuration(step.Timeout); err != nil {
-					return fmt.Errorf("route[%d] (%s) step[%d]: invalid timeout format: %w", i, route.Name, j, err)
-				}
-			}
 			// Validate conflict_resolution
 			if step.ConflictResolution != "" {
 				if step.ConflictResolution != "tools" && step.ConflictResolution != "format" {
@@ -213,5 +206,41 @@ func validateConfig(cfg *Config) error {
 		cfg.Routes[i] = route
 	}
 
+	return nil
+}
+
+// ValidateTimeoutSettings validates only timeout-related configuration values.
+// It is safe to call from runtime constructors that receive programmatic configs.
+func ValidateTimeoutSettings(cfg *Config) error {
+	if err := parseOptionalDuration(cfg.DefaultRouteTimeout, "default_route_timeout: invalid duration format"); err != nil {
+		return err
+	}
+	if err := parseOptionalDuration(cfg.DefaultStepTimeout, "default_step_timeout: invalid duration format"); err != nil {
+		return err
+	}
+	for i, route := range cfg.Routes {
+		if err := parseOptionalDuration(route.RouteTimeout, fmt.Sprintf("route[%d] (%s): invalid route_timeout format", i, route.Name)); err != nil {
+			return err
+		}
+		for j, step := range route.Steps {
+			if err := parseOptionalDuration(step.StepTimeout, fmt.Sprintf("route[%d] (%s) step[%d]: invalid step_timeout format", i, route.Name, j)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func parseOptionalDuration(value, fieldErrorPrefix string) error {
+	if value == "" {
+		return nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("%s: %w", fieldErrorPrefix, err)
+	}
+	if duration <= 0 {
+		return fmt.Errorf("%s: duration must be > 0", fieldErrorPrefix)
+	}
 	return nil
 }

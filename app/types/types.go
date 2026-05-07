@@ -14,25 +14,34 @@ type ErrorResponse struct {
 
 // ErrorDetails contains detailed error information
 type ErrorDetails struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-	Code    string `json:"code,omitempty"`
+	Type    string      `json:"type"`
+	Message string      `json:"message"`
+	Code    string      `json:"code,omitempty"`
 	Details interface{} `json:"details,omitempty"`
 }
 
 // RouteError represents a detailed error when all route steps fail
 type RouteError struct {
-	Route          config.Route      `json:"route"`
-	Errors         []RouteStepError  `json:"errors"`
-	RoutingSummary *RoutingSummary   `json:"routing_summary,omitempty"`
+	Route          config.Route     `json:"route"`
+	Errors         []RouteStepError `json:"errors"`
+	RoutingSummary *RoutingSummary  `json:"routing_summary,omitempty"`
+}
+
+// RouteTimeoutError represents a timeout while executing route steps.
+type RouteTimeoutError struct {
+	Route          config.Route     `json:"route"`
+	TimeoutMs      int64            `json:"timeout_ms"`
+	ElapsedMs      int64            `json:"elapsed_ms"`
+	Errors         []RouteStepError `json:"errors,omitempty"`
+	RoutingSummary *RoutingSummary  `json:"routing_summary,omitempty"`
 }
 
 // RouteStepError represents an error from a specific route step
 type RouteStepError struct {
-	StepIndex  int    `json:"step_index"`
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
-	Error      string `json:"error"`
+	StepIndex int    `json:"step_index"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	Error     string `json:"error"`
 }
 
 // Error implements the error interface for RouteError
@@ -43,6 +52,11 @@ func (e RouteError) Error() string {
 	lastErr := e.Errors[len(e.Errors)-1]
 	return fmt.Sprintf("all route steps failed for model '%s', last error from %s/%s: %s",
 		e.Route.Name, lastErr.Provider, lastErr.Model, lastErr.Error)
+}
+
+// Error implements the error interface for RouteTimeoutError.
+func (e RouteTimeoutError) Error() string {
+	return fmt.Sprintf("route '%s' timed out after %dms", e.Route.Name, e.TimeoutMs)
 }
 
 // truncateContent truncates content to first 100 characters
@@ -398,6 +412,6 @@ type RouteStepResult struct {
 
 // RoutingSummary contains the history of route steps tried for a request
 type RoutingSummary struct {
-	RouteName string           `json:"route_name"`
+	RouteName string            `json:"route_name"`
 	Steps     []RouteStepResult `json:"steps"`
 }

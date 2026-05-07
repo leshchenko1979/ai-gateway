@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -92,9 +94,9 @@ func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Reques
 func (s *Server) writeErrorResponse(w http.ResponseWriter, errorType, message, code string, statusCode int, details interface{}) {
 	s.logger.Error(message, nil, map[string]interface{}{
 		"error_type": errorType,
-		"code":      code,
-		"status":    statusCode,
-		"details":   details,
+		"code":       code,
+		"status":     statusCode,
+		"details":    details,
 	})
 	response := types.ErrorResponse{
 		Error: types.ErrorDetails{
@@ -167,8 +169,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		})
 
 		// Check if it's a route lookup error (no route found)
-		if err.Error() == fmt.Sprintf("route lookup failed: no route found for model '%s'", req.Model) {
+		if errors.Is(err, providers.ErrRouteNotFound) {
 			s.writeErrorResponse(w, "route_error", fmt.Sprintf("No route configured for model '%s'", req.Model), "ROUTE_NOT_FOUND", http.StatusNotFound, nil)
+			return
+		}
+
+		// Request context was canceled (e.g., client disconnected).
+		if errors.Is(err, context.Canceled) {
+			s.writeErrorResponse(w, "execution_error", "Request was canceled", "CLIENT_CANCELED", http.StatusRequestTimeout, nil)
+			return
+		}
+
+		// Check if it's a detailed route error with step information
+		if routeTimeoutErr, ok := err.(types.RouteTimeoutError); ok {
+			s.writeErrorResponse(w, "execution_error", "Route timeout exceeded", "ROUTE_TIMEOUT", http.StatusGatewayTimeout, routeTimeoutErr)
 			return
 		}
 
