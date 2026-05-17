@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"ai-gateway/config"
 	"ai-gateway/types"
@@ -89,9 +90,16 @@ func checkUpstreamModelList(ctx context.Context, p config.Provider) (out Upstrea
 	return out
 }
 
-func truncateBody(s string, n int) string {
-	if len(s) <= n {
+func truncateBody(s string, maxRunes int) string {
+	if utf8.RuneCountInString(s) <= maxRunes {
 		return s
 	}
-	return s[:n] + "..."
+	count := 0
+	for i := range s {
+		if count == maxRunes {
+			return s[:i] + "..."
+		}
+		count++
+	}
+	return s
 }
