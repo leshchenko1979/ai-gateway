@@ -78,6 +78,11 @@ func (s *Server) setupRoutes() http.Handler {
 func (s *Server) instrument(next http.Handler) http.Handler {
 	tracer := telemetry.Tracer("ai-gateway.server")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		ctx, span := tracer.Start(r.Context(), fmt.Sprintf("http.%s", r.URL.Path),
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
