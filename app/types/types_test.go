@@ -2,7 +2,10 @@ package types
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestChatRequest_ReplacesOnlyModel(t *testing.T) {
@@ -95,6 +98,37 @@ func TestChatRequest_ReplacesOnlyModel(t *testing.T) {
 		t.Error("message structure incorrect")
 	} else if msg["role"] != "user" || msg["content"] != "Hello" {
 		t.Errorf("message content incorrect: %+v", msg)
+	}
+}
+
+func TestChatRequest_TruncateRequestForLogging_UTF8(t *testing.T) {
+	// Cyrillic is 2 bytes per rune; byte slicing at 100 would split a character.
+	longCyrillic := strings.Repeat("а", 120)
+	originalJSON := fmt.Sprintf(`{"model":"gpt-4","messages":[{"role":"assistant","content":%q}]}`, longCyrillic)
+
+	var request ChatRequest
+	if err := json.Unmarshal([]byte(originalJSON), &request); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	truncated := request.TruncateRequestForLogging()
+	var truncatedMap map[string]interface{}
+	if err := json.Unmarshal(truncated.Raw, &truncatedMap); err != nil {
+		t.Fatalf("Failed to unmarshal truncated JSON: %v", err)
+	}
+
+	messages := truncatedMap["messages"].([]interface{})
+	msg := messages[0].(map[string]interface{})
+	content := msg["content"].(string)
+
+	if !utf8.ValidString(content) {
+		t.Fatalf("truncated content is not valid UTF-8: %q", content)
+	}
+	if strings.Contains(content, "\uFFFD") {
+		t.Fatalf("truncated content contains replacement character: %q", content)
+	}
+	if utf8.RuneCountInString(content) != 103 { // 100 runes + "..."
+		t.Fatalf("expected 103 runes, got %d: %q", utf8.RuneCountInString(content), content)
 	}
 }
 

@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 
 	"ai-gateway/config"
 )
@@ -59,13 +60,20 @@ func (e RouteTimeoutError) Error() string {
 	return fmt.Sprintf("route '%s' timed out after %dms", e.Route.Name, e.TimeoutMs)
 }
 
-// truncateContent truncates content to first 100 characters
+// truncateContent truncates content to the first maxRunes Unicode code points.
 func truncateContent(content string) string {
-	const maxLength = 100
-	if len(content) <= maxLength {
+	const maxRunes = 100
+	if utf8.RuneCountInString(content) <= maxRunes {
 		return content
 	}
-	return content[:maxLength] + "..."
+	n := 0
+	for i := range content {
+		if n == maxRunes {
+			return content[:i] + "..."
+		}
+		n++
+	}
+	return content
 }
 
 // truncateMessageContent truncates message content (string or array)
