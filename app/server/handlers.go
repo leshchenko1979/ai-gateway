@@ -54,7 +54,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 // handleUpstreamModelsCheck runs GET {base_url}/models against each configured provider (parallel).
 func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		s.logger.Info("Method not allowed", map[string]interface{}{
+		s.logger.Info(r.Context(), "Method not allowed", map[string]interface{}{
 			"method": r.Method,
 			"path":   r.URL.Path,
 		})
@@ -74,7 +74,7 @@ func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Reques
 	status := http.StatusOK
 	if !allOK {
 		status = http.StatusServiceUnavailable
-		s.logger.Info("Upstream health check failed", map[string]interface{}{
+		s.logger.Info(r.Context(), "Upstream health check failed", map[string]interface{}{
 			"providers": results,
 		})
 	}
@@ -91,8 +91,8 @@ func (s *Server) handleUpstreamModelsCheck(w http.ResponseWriter, r *http.Reques
 }
 
 // writeErrorResponse writes a unified error response
-func (s *Server) writeErrorResponse(w http.ResponseWriter, errorType, message, code string, statusCode int, details interface{}) {
-	s.logger.Error(message, nil, map[string]interface{}{
+func (s *Server) writeErrorResponse(ctx context.Context, w http.ResponseWriter, errorType, message, code string, statusCode int, details interface{}) {
+	s.logger.Error(ctx, message, nil, map[string]interface{}{
 		"error_type": errorType,
 		"code":       code,
 		"status":     statusCode,
@@ -120,10 +120,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Parse request
 	var req types.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.logger.Error("Failed to parse request", err, map[string]interface{}{
+		s.logger.Error(r.Context(), "Failed to parse request", err, map[string]interface{}{
 			"request_id": requestID,
 		})
-		s.writeErrorResponse(w, "parsing_error", "Invalid JSON in request body", "INVALID_JSON", http.StatusBadRequest, nil)
+		s.writeErrorResponse(r.Context(), w, "parsing_error", "Invalid JSON in request body", "INVALID_JSON", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -133,11 +133,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		truncatedReq := req.TruncateRequestForLogging()
 		requestJSON, _ := json.Marshal(truncatedReq)
 
-		s.logger.Error("Invalid request", err, map[string]interface{}{
+		s.logger.Error(r.Context(), "Invalid request", err, map[string]interface{}{
 			"request_id":   requestID,
 			"request_json": string(requestJSON),
 		})
-		s.writeErrorResponse(w, "validation_error", err.Error(), "VALIDATION_FAILED", http.StatusBadRequest, nil)
+		s.writeErrorResponse(r.Context(), w, "validation_error", err.Error(), "VALIDATION_FAILED", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	messageCount := len(temp.Messages)
 
 	// Log request summary with truncated JSON
-	s.logger.Info("Chat completion request", map[string]interface{}{
+	s.logger.Info(r.Context(), "Chat completion request", map[string]interface{}{
 		"request_id":   requestID,
 		"model":        req.Model,
 		"messages":     messageCount,
@@ -163,37 +163,37 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Execute route for the requested model
 	response, err := s.manager.ExecuteWithTracing(r.Context(), req, requestID)
 	if err != nil {
-		s.logger.Error("Request execution failed", err, map[string]interface{}{
+		s.logger.Error(r.Context(), "Request execution failed", err, map[string]interface{}{
 			"request_id": requestID,
 			"model":      req.Model,
 		})
 
 		// Check if it's a route lookup error (no route found)
 		if errors.Is(err, providers.ErrRouteNotFound) {
-			s.writeErrorResponse(w, "route_error", fmt.Sprintf("No route configured for model '%s'", req.Model), "ROUTE_NOT_FOUND", http.StatusNotFound, nil)
+			s.writeErrorResponse(r.Context(), w, "route_error", fmt.Sprintf("No route configured for model '%s'", req.Model), "ROUTE_NOT_FOUND", http.StatusNotFound, nil)
 			return
 		}
 
 		// Request context was canceled (e.g., client disconnected).
 		if errors.Is(err, context.Canceled) {
-			s.writeErrorResponse(w, "execution_error", "Request was canceled", "CLIENT_CANCELED", http.StatusRequestTimeout, nil)
+			s.writeErrorResponse(r.Context(), w, "execution_error", "Request was canceled", "CLIENT_CANCELED", http.StatusRequestTimeout, nil)
 			return
 		}
 
 		// Check if it's a detailed route error with step information
 		if routeTimeoutErr, ok := err.(types.RouteTimeoutError); ok {
-			s.writeErrorResponse(w, "execution_error", "Route timeout exceeded", "ROUTE_TIMEOUT", http.StatusGatewayTimeout, routeTimeoutErr)
+			s.writeErrorResponse(r.Context(), w, "execution_error", "Route timeout exceeded", "ROUTE_TIMEOUT", http.StatusGatewayTimeout, routeTimeoutErr)
 			return
 		}
 
 		// Check if it's a detailed route error with step information
 		if routeErr, ok := err.(types.RouteError); ok {
-			s.writeErrorResponse(w, "execution_error", "All route steps failed", "ROUTE_EXECUTION_FAILED", http.StatusBadGateway, routeErr)
+			s.writeErrorResponse(r.Context(), w, "execution_error", "All route steps failed", "ROUTE_EXECUTION_FAILED", http.StatusBadGateway, routeErr)
 			return
 		}
 
 		// Fallback for other errors
-		s.writeErrorResponse(w, "execution_error", err.Error(), "EXECUTION_FAILED", http.StatusBadGateway, nil)
+		s.writeErrorResponse(r.Context(), w, "execution_error", err.Error(), "EXECUTION_FAILED", http.StatusBadGateway, nil)
 		return
 	}
 

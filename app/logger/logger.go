@@ -28,14 +28,16 @@ func (l *Logger) AddRedactKey(key string) {
 	l.redactKeys = append(l.redactKeys, key)
 }
 
-// Info logs an info message with structured fields
-func (l *Logger) Info(message string, fields map[string]interface{}) {
+// Info logs an info message with structured fields.
+// Pass the request context so OTLP log events attach to the active trace span.
+func (l *Logger) Info(ctx context.Context, message string, fields map[string]interface{}) {
 	l.log("INFO", message, fields, nil)
-	telemetry.RecordLog(context.Background(), "info", message, fields)
+	telemetry.RecordLog(ctx, "info", message, fields)
 }
 
-// Error logs an error message with structured fields
-func (l *Logger) Error(message string, err error, fields map[string]interface{}) {
+// Error logs an error message with structured fields.
+// Pass the request context so OTLP log events attach to the active trace span.
+func (l *Logger) Error(ctx context.Context, message string, err error, fields map[string]interface{}) {
 	if fields == nil {
 		fields = make(map[string]interface{})
 	}
@@ -43,7 +45,7 @@ func (l *Logger) Error(message string, err error, fields map[string]interface{})
 		fields["error"] = err.Error()
 	}
 	l.log("ERROR", message, fields, err)
-	telemetry.RecordLog(context.Background(), "error", message, fields)
+	telemetry.RecordLog(ctx, "error", message, fields)
 }
 
 // log writes a structured log entry

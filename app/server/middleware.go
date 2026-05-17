@@ -27,7 +27,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// Validate API key
 		if apiKey == "" || apiKey != s.config.APIKey {
-			s.logger.Error("Authentication failed", nil, map[string]interface{}{
+			s.logger.Error(r.Context(), "Authentication failed", nil, map[string]interface{}{
 				"path":    r.URL.Path,
 				"has_key": apiKey != "",
 			})

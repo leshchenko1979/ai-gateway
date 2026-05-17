@@ -125,7 +125,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			fields["request_id"] = requestID
 		}
 
-		m.logger.Info("Trying route step", fields)
+		m.logger.Info(routeCtx, "Trying route step", fields)
 
 		_, stepSpan := m.tracer.Start(routeCtx, fmt.Sprintf("route.%s.step.%d", route.Name, stepIndex),
 			trace.WithAttributes(
@@ -156,7 +156,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 				errorFields["request_id"] = requestID
 			}
 
-			m.logger.Error("Route step failed", err, errorFields)
+			m.logger.Error(routeCtx, "Route step failed", err, errorFields)
 			stepSpan.RecordError(err)
 			stepSpan.SetStatus(codes.Error, err.Error())
 			routeSpan.RecordError(err)
@@ -204,7 +204,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			successFields["request_id"] = requestID
 		}
 
-		m.logger.Info("Route step succeeded", successFields)
+		m.logger.Info(routeCtx, "Route step succeeded", successFields)
 		stepSpan.SetAttributes(attribute.String("step.response", string(responseJSON)))
 		stepSpan.SetStatus(codes.Ok, "success")
 		stepSpan.End()

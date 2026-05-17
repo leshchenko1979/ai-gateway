@@ -93,7 +93,7 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 
 // Start starts the HTTPS server
 func (s *Server) Start() error {
-	s.logger.Info("Starting server", map[string]interface{}{
+	s.logger.Info(context.Background(), "Starting server", map[string]interface{}{
 		"port":      s.config.Port,
 		"providers": len(s.config.Providers),
 		"routes":    len(s.config.Routes),

@@ -91,11 +91,6 @@ func Tracer(name string) trace.Tracer {
 
 // RecordLog writes log events as OTLP span events to ensure they reach the exporter.
 func RecordLog(ctx context.Context, level, message string, fields map[string]interface{}) {
-	tracer := Tracer("logger")
-	if tracer == nil {
-		return
-	}
-
 	var attrs []attribute.KeyValue
 	if level != "" {
 		attrs = append(attrs, attribute.String("log.level", level))
@@ -108,14 +103,10 @@ func RecordLog(ctx context.Context, level, message string, fields map[string]int
 	}
 
 	span := trace.SpanFromContext(ctx)
-	if span != nil && span.SpanContext().IsValid() {
-		span.AddEvent(message, trace.WithAttributes(attrs...))
+	if span == nil || !span.SpanContext().IsValid() {
 		return
 	}
-
-	ctx, span = tracer.Start(ctx, "log.record", trace.WithAttributes(attrs...))
-	span.AddEvent(message)
-	span.End()
+	span.AddEvent(message, trace.WithAttributes(attrs...))
 }
 
 func newTraceExporter(ctx context.Context, endpoint, apiKey string) (*otlptrace.Exporter, error) {
