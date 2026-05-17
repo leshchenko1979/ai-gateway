@@ -116,6 +116,16 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			return nil, err
 		}
 
+		stepCtx, stepSpan := m.tracer.Start(routeCtx, fmt.Sprintf("step/%s", step.Model),
+			trace.WithAttributes(
+				attribute.String("step.provider", step.Provider),
+				attribute.String("step.model", step.Model),
+				attribute.Int("step.index", stepIndex),
+				attribute.String("route.name", route.Name),
+			),
+			trace.WithSpanKind(trace.SpanKindClient),
+		)
+
 		fields := map[string]interface{}{
 			"provider": step.Provider,
 			"model":    step.Model,
@@ -125,21 +135,11 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			fields["request_id"] = requestID
 		}
 
-		m.logger.Info(routeCtx, "Trying route step", fields)
-
-		_, stepSpan := m.tracer.Start(routeCtx, fmt.Sprintf("route.%s.step.%d", route.Name, stepIndex),
-			trace.WithAttributes(
-				attribute.String("step.provider", step.Provider),
-				attribute.String("step.model", step.Model),
-				attribute.Int("step.index", stepIndex),
-			),
-			trace.WithSpanKind(trace.SpanKindClient),
-		)
+		m.logger.Info(stepCtx, "Trying route step", fields)
 
 		start := time.Now()
-		// Create provider client on-demand with route step configuration
 		provider := NewClientWithRouteStep(providerCfg, step, m.config.DefaultStepTimeout, m.logger)
-		response, err := provider.Call(routeCtx, request)
+		response, err := provider.Call(stepCtx, request)
 		duration := time.Since(start)
 
 		stepSpan.SetAttributes(attribute.Int64("step.duration_ms", duration.Milliseconds()))
@@ -156,13 +156,14 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 				errorFields["request_id"] = requestID
 			}
 
-			m.logger.Error(routeCtx, "Route step failed", err, errorFields)
+			m.logger.Error(stepCtx, "Route step failed", err, errorFields)
 			stepSpan.RecordError(err)
 			stepSpan.SetStatus(codes.Error, err.Error())
 			routeSpan.RecordError(err)
 			routeSpan.AddEvent("step.failed", trace.WithAttributes(
 				attribute.String("step.error", err.Error()),
 				attribute.String("step.provider", step.Provider),
+				attribute.String("step.model", step.Model),
 			))
 			stepErrors = append(stepErrors, types.RouteStepError{
 				StepIndex: stepIndex,
@@ -188,7 +189,6 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			continue
 		}
 
-		// Convert response to JSON for logging (with truncated message contents)
 		truncatedResp := response.TruncateResponseForLogging()
 		responseJSON, _ := json.Marshal(truncatedResp)
 		responseJSONForLog := types.TruncateJSONForLogging(responseJSON)
@@ -205,7 +205,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			successFields["request_id"] = requestID
 		}
 
-		m.logger.Info(routeCtx, "Route step succeeded", successFields)
+		m.logger.Info(stepCtx, "Route step succeeded", successFields)
 		stepSpan.SetAttributes(attribute.String("step.response", responseJSONForLog))
 		stepSpan.SetStatus(codes.Ok, "success")
 		stepSpan.End()
