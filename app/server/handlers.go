@@ -135,7 +135,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		s.logger.Error(r.Context(), "Invalid request", err, map[string]interface{}{
 			"request_id":   requestID,
-			"request_json": string(requestJSON),
+			"request_json": types.TruncateJSONForLogging(requestJSON),
 		})
 		s.writeErrorResponse(r.Context(), w, "validation_error", err.Error(), "VALIDATION_FAILED", http.StatusBadRequest, nil)
 		return
@@ -157,7 +157,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		"request_id":   requestID,
 		"model":        req.Model,
 		"messages":     messageCount,
-		"request_json": string(requestJSON),
+		"request_json": types.TruncateJSONForLogging(requestJSON),
 	})
 
 	// Execute route for the requested model

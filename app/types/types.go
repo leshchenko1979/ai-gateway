@@ -60,20 +60,55 @@ func (e RouteTimeoutError) Error() string {
 	return fmt.Sprintf("route '%s' timed out after %dms", e.Route.Name, e.TimeoutMs)
 }
 
-// truncateContent truncates content to the first maxRunes Unicode code points.
+const (
+	maxLogFieldRunes = 100
+	maxLogJSONRunes  = 4096
+)
+
+// truncateContent truncates a string to the first maxLogFieldRunes Unicode code points.
 func truncateContent(content string) string {
-	const maxRunes = 100
-	if utf8.RuneCountInString(content) <= maxRunes {
-		return content
+	return truncateRunes(content, maxLogFieldRunes)
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 || utf8.RuneCountInString(s) <= maxRunes {
+		return s
 	}
 	n := 0
-	for i := range content {
+	for i := range s {
 		if n == maxRunes {
-			return content[:i] + "..."
+			return s[:i] + "..."
 		}
 		n++
 	}
-	return content
+	return s
+}
+
+// TruncateJSONForLogging caps serialized JSON for log/span attributes without splitting UTF-8.
+func TruncateJSONForLogging(raw []byte) string {
+	return truncateRunes(string(raw), maxLogJSONRunes)
+}
+
+// truncateLogValue recursively truncates strings in message-like maps and arrays.
+func truncateLogValue(v interface{}) interface{} {
+	switch x := v.(type) {
+	case string:
+		return truncateContent(x)
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(x))
+		for k, val := range x {
+			out[k] = truncateLogValue(val)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(x))
+		for i, val := range x {
+			out[i] = truncateLogValue(val)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // truncateMessageContent truncates message content (string or array)
@@ -143,24 +178,11 @@ func (r *ChatRequest) TruncateRequestForLogging() *ChatRequest {
 		return &ChatRequest{Model: r.Model}
 	}
 
-	// Truncate message contents
 	if msgs, ok := temp["messages"].([]interface{}); ok {
 		truncatedMsgs := make([]interface{}, len(msgs))
 		for i, msg := range msgs {
 			if msgMap, ok := msg.(map[string]interface{}); ok {
-				truncatedMsg := make(map[string]interface{})
-				for k, v := range msgMap {
-					if k == "content" {
-						if contentBytes, err := json.Marshal(v); err == nil {
-							truncatedMsg[k] = json.RawMessage(truncateMessageContent(contentBytes))
-						} else {
-							truncatedMsg[k] = v
-						}
-					} else {
-						truncatedMsg[k] = v
-					}
-				}
-				truncatedMsgs[i] = truncatedMsg
+				truncatedMsgs[i] = truncateLogValue(msgMap)
 			}
 		}
 		temp["messages"] = truncatedMsgs
@@ -200,34 +222,19 @@ func (r *ChatResponse) TruncateResponseForLogging() *ChatResponse {
 		return &ChatResponse{}
 	}
 
-	// Truncate message contents in choices
 	if choices, ok := temp["choices"].([]interface{}); ok {
 		truncatedChoices := make([]interface{}, len(choices))
 		for i, choice := range choices {
 			if choiceMap, ok := choice.(map[string]interface{}); ok {
-				truncatedChoice := make(map[string]interface{})
+				truncatedChoice := make(map[string]interface{}, len(choiceMap))
 				for k, v := range choiceMap {
 					if k == "message" {
 						if msgMap, ok := v.(map[string]interface{}); ok {
-							truncatedMsg := make(map[string]interface{})
-							for msgK, msgV := range msgMap {
-								if msgK == "content" {
-									if contentBytes, err := json.Marshal(msgV); err == nil {
-										truncatedMsg[msgK] = json.RawMessage(truncateMessageContent(contentBytes))
-									} else {
-										truncatedMsg[msgK] = msgV
-									}
-								} else {
-									truncatedMsg[msgK] = msgV
-								}
-							}
-							truncatedChoice[k] = truncatedMsg
-						} else {
-							truncatedChoice[k] = v
+							truncatedChoice[k] = truncateLogValue(msgMap)
+							continue
 						}
-					} else {
-						truncatedChoice[k] = v
 					}
+					truncatedChoice[k] = v
 				}
 				truncatedChoices[i] = truncatedChoice
 			}

@@ -191,13 +191,14 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 		// Convert response to JSON for logging (with truncated message contents)
 		truncatedResp := response.TruncateResponseForLogging()
 		responseJSON, _ := json.Marshal(truncatedResp)
+		responseJSONForLog := types.TruncateJSONForLogging(responseJSON)
 
 		successFields := map[string]interface{}{
 			"provider":      step.Provider,
 			"model":         step.Model,
 			"route":         route.Name,
 			"step":          stepIndex,
-			"response_json": string(responseJSON),
+			"response_json": responseJSONForLog,
 			"duration_ms":   duration.Milliseconds(),
 		}
 		if requestID != "" {
@@ -205,7 +206,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 		}
 
 		m.logger.Info(routeCtx, "Route step succeeded", successFields)
-		stepSpan.SetAttributes(attribute.String("step.response", string(responseJSON)))
+		stepSpan.SetAttributes(attribute.String("step.response", responseJSONForLog))
 		stepSpan.SetStatus(codes.Ok, "success")
 		stepSpan.End()
 

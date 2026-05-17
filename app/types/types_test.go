@@ -101,6 +101,62 @@ func TestChatRequest_ReplacesOnlyModel(t *testing.T) {
 	}
 }
 
+func TestChatResponse_TruncateResponseForLogging_UTF8(t *testing.T) {
+	prefix := "<b>О, жалобный сигнал получен.</b> Я, кибер‑защитница "
+	longContent := prefix + strings.Repeat("а", 80)
+	longReasoning := strings.Repeat("р", 150)
+	originalJSON := fmt.Sprintf(`{
+		"choices": [{
+			"message": {
+				"role": "assistant",
+				"content": %q,
+				"reasoning": %q,
+				"reasoning_details": [{"type": "reasoning.text", "text": %q}]
+			}
+		}]
+	}`, longContent, longReasoning, longReasoning)
+
+	var response ChatResponse
+	if err := json.Unmarshal([]byte(originalJSON), &response); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	truncated := response.TruncateResponseForLogging()
+	logJSON := TruncateJSONForLogging(truncated.Raw)
+
+	if !utf8.ValidString(logJSON) {
+		t.Fatalf("log JSON is not valid UTF-8")
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(logJSON), &parsed); err != nil {
+		t.Fatalf("Failed to unmarshal log JSON: %v", err)
+	}
+
+	choices := parsed["choices"].([]interface{})
+	msg := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	content := msg["content"].(string)
+	reasoning := msg["reasoning"].(string)
+
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"content", content},
+		{"reasoning", reasoning},
+	} {
+		if !utf8.ValidString(field.value) {
+			t.Fatalf("%s is not valid UTF-8: %q", field.name, field.value)
+		}
+		if strings.Contains(field.value, "\uFFFD") {
+			t.Fatalf("%s contains replacement character: %q", field.name, field.value)
+		}
+		if utf8.RuneCountInString(field.value) != 103 {
+			t.Fatalf("%s rune count = %d, want 103: %q", field.name, utf8.RuneCountInString(field.value), field.value)
+		}
+	}
+}
+
 func TestChatRequest_TruncateRequestForLogging_UTF8(t *testing.T) {
 	// Cyrillic is 2 bytes per rune; byte slicing at 100 would split a character.
 	longCyrillic := strings.Repeat("а", 120)
