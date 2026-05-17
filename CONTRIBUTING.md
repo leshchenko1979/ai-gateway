@@ -27,6 +27,12 @@
    cd app && gofmt -w .
    ```
 
+### Observability (when changing logging or routes)
+
+- Pass **request context** into `logger.Info` / `logger.Error` so OTLP exports log lines as span events on the active trace (e.g. `r.Context()` in handlers, `stepCtx` in `providers/manager.go`).
+- Route steps use span name `step/{model}`; call `stepSpan.End()` before each `continue` in the route loop — do not `defer stepSpan.End()` inside that `for` loop.
+- See [README.md — OpenTelemetry](README.md#opentelemetry-otlphttp) for env vars and collector examples.
+
 ## Pull requests
 
 - Branch from `main`, keep commits focused, and reference an issue when one exists.

@@ -129,7 +129,40 @@ For systemd deployments, terminate TLS at a reverse proxy such as `nginx` or `tr
 
 - Security defaults include API key redaction, non-root execution, and restrictive file permissions.
 - Run behind TLS in production.
-- OpenTelemetry over OTLP/HTTP is supported via `OTLP_ENDPOINT`, `OTLP_API_KEY`, optional `OTEL_SERVICE_NAME` or `OTLP_SERVICE_NAME`, optional `OTEL_RESOURCE_ATTRIBUTES` or `OTLP_RESOURCE_ATTRIBUTES`, and optional `OTLP_HEADERS`.
+
+### OpenTelemetry (OTLP/HTTP)
+
+Telemetry is optional. Set **`OTLP_ENDPOINT`** and **`OTLP_API_KEY`** in `.env` (synced to the VDS with `scripts/sync-config-to-vds.sh` or `./ops.sh deploy-docker`). If either is unset, tracing is disabled and only JSON logs go to stdout.
+
+| Variable | Purpose |
+|----------|---------|
+| `OTLP_ENDPOINT` | Collector base URL (e.g. `https://logfire-us.pydantic.dev`) |
+| `OTLP_API_KEY` | Write token or API key (required to enable export) |
+| `OTLP_SERVICE_NAME` | `service.name` resource attribute (default `ai-gateway`) |
+| `OTLP_RESOURCE_ATTRIBUTES` | Extra attributes, comma-separated `key=value` |
+| `OTLP_HEADERS` | Extra exporter headers, comma-separated `Key=Value` |
+
+Standard `OTEL_*` names are also accepted for service name and resource attributes.
+
+**Trace shape** for chat requests:
+
+```
+http.{path} → route/{routeName} → step/{upstreamModel}
+```
+
+Structured log lines (`Trying route step`, `Route step succeeded`, etc.) are exported as **span events** on the active span, not as separate log spans.
+
+**Logfire** (plain token auth):
+
+```bash
+OTLP_ENDPOINT=https://logfire-us.pydantic.dev
+OTLP_API_KEY=your-write-token
+OTLP_HEADERS=Authorization=your-write-token
+```
+
+The exporter defaults to Grafana-style Basic auth; `OTLP_HEADERS` overrides `Authorization` for Logfire.
+
+**Grafana Cloud:** set `OTLP_ENDPOINT` to your stack OTLP URL and `OTLP_API_KEY` to a `glc_…` token; Basic auth for the stack is derived automatically when possible.
 
 ## Maintainer Notes
 

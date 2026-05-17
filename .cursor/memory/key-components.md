@@ -16,12 +16,16 @@
   - Route/provider validation with cross-reference checking
 - **Ops**: Task **Verify provider model lists** runs `go run ./cmd/check-models` from `app/` (see `.vscode/tasks.json`) to confirm each provider’s upstream `/models` endpoint.
 
+### Logger (`logger/`)
+- **`Info(ctx, ...)` / `Error(ctx, ...)`**: Structured JSON to stdout + `telemetry.RecordLog(ctx, ...)` for OTLP correlation.
+- Callers must pass request/step context (not `context.Background()`) so log lines appear as span events on the active trace.
+
 ### Provider Management (`providers/`)
-- **`manager.go`**: Route-based provider execution
-- **`client.go`**: HTTP client with conflict resolution
+- **`manager.go`**: Route-based provider execution with OpenTelemetry spans
+- **`client.go`**: HTTP client with conflict resolution (no nested HTTP spans yet)
 - **Key Functions**:
   - `Manager.GetRoute()`: Exact model name matching
-  - `Manager.ExecuteWithTracing()`: Sequential route step execution with route-scoped timeout context
+  - `Manager.ExecuteWithTracing()`: Route span + per-step `step/{model}` span; `stepCtx` for logs and `provider.Call`; explicit `stepSpan.End()` per iteration (not `defer` in `for`)
   - `NewManager(cfg, ...)`: Uses config-level timeout policy (`default_route_timeout`, `route_timeout`, `step_timeout`)
   - `Client.applyConflictResolution()`: Request field manipulation
 
@@ -45,12 +49,21 @@
   - Helper methods for content type detection and extraction
 
 ### Telemetry (`telemetry/`)
-- **Purpose**: Initializes the **OTLP/HTTP exporter** that sends traces and logger events to whichever collector `OTEL_*` or `OTLP_*` env vars point to.
+- **Purpose**: OTLP/HTTP trace export; log lines become **span events** on the active span (not separate log spans).
 - **Key Components**:
-  - **`newTraceExporter()`**: Supports **automatic Grafana Cloud authentication** by parsing `glc_` tokens.
-  - **`normalizeEndpoint()`**: Intelligent URL and signal path handling.
-  - **`RecordLog()`**: Reusable helper that replays logger entries into OTLP.
-  - **Standard Compliance**: Supports both standard `OTEL_` and legacy `OTLP_` environment variables.
+  - **`newTraceExporter()`**: Grafana `glc_` Basic auth automation; **Logfire** needs `OTLP_HEADERS=Authorization=<write-token>` to override default Basic auth.
+  - **`normalizeEndpoint()`**: Appends `/v1/traces` when a custom path is given.
+  - **`RecordLog(ctx, ...)`**: `span.AddEvent` when `trace.SpanFromContext(ctx)` is valid; no-op otherwise (no orphan spans).
+  - **Env vars**: `OTLP_ENDPOINT`, `OTLP_API_KEY` (both required to enable), `OTLP_SERVICE_NAME`, `OTLP_RESOURCE_ATTRIBUTES`, `OTLP_HEADERS`; also `OTEL_*` aliases.
+
+### Trace span tree (chat requests)
+```
+http.{path}  (server.instrument)
+└── route/{routeName}  (Manager)
+    └── step/{model}  (Manager; step.index attribute if same model repeated)
+        ├── span events: Trying route step, Route step succeeded|failed
+        └── provider HTTP (context-bound; no child span yet)
+```
 
 ## Data Flow: Request Processing
 

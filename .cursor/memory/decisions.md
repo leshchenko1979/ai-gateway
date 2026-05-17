@@ -266,3 +266,36 @@ Switch from OTLP/gRPC to OTLP/HTTP for exporting telemetry and structured logs.
 - Added logic to parse `glc_` tokens and extract the Org/Stack ID to use as the Basic auth username.
 - Implemented intelligent path handling: if the user provides `.../otlp`, the exporter correctly appends `/v1/traces`.
 - Added support for `OTEL_` standard environment variables alongside `OTLP_` overrides.
+
+## Logfire as production OTLP backend (2026-05-17)
+
+### Decision
+Point VDS `OTLP_ENDPOINT` at Logfire US; authenticate with write token via `OTLP_HEADERS`, not Grafana-style Basic auth alone.
+
+### Rationale
+- Logfire accepts standard OTLP/HTTP; ai-gateway already exports via `otlptracehttp`.
+- Default exporter sets `Authorization: Basic base64(apiKey:)`, which Logfire rejects — `OTLP_HEADERS=Authorization=<token>` overrides it.
+- Keep exporter vendor-agnostic; only `.env` changes per backend.
+
+## Logger context for trace correlation (2026-05-17)
+
+### Decision
+`logger.Info` / `logger.Error` require `context.Context`; `RecordLog` only emits OTLP span events when ctx contains a valid span.
+
+### Rationale
+- Prior `RecordLog(context.Background(), ...)` created orphan `log.record` spans in Logfire.
+- Span events nest under `http.*` / `route/*` / `step/*` when handlers and manager pass the right ctx.
+
+### Pitfall avoided
+Do not create fallback spans in `RecordLog` when ctx has no span — skip OTLP for startup logs instead.
+
+## Step span as parent for step work (2026-05-17)
+
+### Decision
+Each route step gets span name `step/{model}`; all step logs and `provider.Call` use `stepCtx` from `tracer.Start(routeCtx, ...)`.
+
+### Lifecycle rule
+**Never `defer stepSpan.End()` inside the route `for` loop** — defers run at function return, so failed steps stay open across failover. Call `stepSpan.End()` before `continue` and before success `return`.
+
+### Attributes
+`step.provider`, `step.model`, `step.index`, `route.name` on the step span; duplicate model names distinguished by `step.index`.

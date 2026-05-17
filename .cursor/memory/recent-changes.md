@@ -1,5 +1,12 @@
 # Recent Changes
 
+## Logfire OTLP + trace/log correlation (2026-05-17)
+
+- **Backend:** VDS `.env` switched from Grafana Cloud OTLP to **Logfire US** (`logfire-us.pydantic.dev`); sync via `scripts/sync-config-to-vds.sh`.
+- **Logger:** `Info`/`Error` take `context.Context`; `telemetry.RecordLog` adds **span events** only when ctx carries a valid span (no orphan `log.record` spans).
+- **Step spans:** Each route step is `step/{model}` under `route/{name}`; `stepCtx` used for logs and `provider.Call`. **Do not** `defer stepSpan.End()` inside the route `for` loop — call `stepSpan.End()` before `continue` and on success (see [decisions.md](#decisions.md)).
+- **Server:** Handlers/middleware pass `r.Context()`; `writeErrorResponse` accepts ctx.
+
 ## README end-user refresh + maintainer docs move (2026-05-07)
 
 - **README focus shift:** Rewrote `README.md` to be end-user first: clear app integration contract (base URL, route-name model mapping, auth), Docker-first quick start, shorter config/API sections, and simplified deploy options.
@@ -286,9 +293,8 @@ Complete architectural refactoring from provider-centric to route-based configur
 - Added tests for route lookup and step execution
 
 ## Ongoing Work
-- Docker deployment files (.dockerignore, Dockerfile, docker-compose.yml) not yet committed
-- Branch diverged from origin/main (consider pull/rebase)
-- Monitor for edge cases in Docker production deployment
+- Deploy/commit step-span + logger-context changes if still only local
+- Optional: child HTTP spans in `providers/client.go`; unit tests for `RecordLog` / step span end timing
 
 ## Blockers
 - None

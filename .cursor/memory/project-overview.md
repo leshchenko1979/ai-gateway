@@ -27,7 +27,9 @@ A lightweight, OpenAI-compatible API gateway written in Go that routes requests 
 - `types/`: Data structures for requests/responses
 
 ### Observability
-- `telemetry/`: Configures the OTLP exporter that streams traces and logger events to whichever collector is pointed to by `OTLP_ENDPOINT`, `OTLP_API_KEY`, and related env vars.
+- `telemetry/`: OTLP/HTTP traces + log correlation via span events (see [key-components.md](#key-components.md)).
+- **Production backend:** [Logfire](https://logfire.pydantic.dev) US (`OTLP_ENDPOINT=https://logfire-us.pydantic.dev`); use `OTLP_HEADERS=Authorization=<write-token>` (plain token, not Grafana Basic auth). Exporter still supports Grafana `glc_` tokens when configured.
+- **Trace hierarchy:** `http.{path}` → `route/{name}` → `step/{model}`; structured logs attach as events on the active span when callers pass request context (see [decisions.md](#decisions.md)).
 
 ### Data Flow
 1. Client sends request with specific model name
@@ -48,4 +50,4 @@ Resolves "tools is incompatible with response_format" errors:
 - **Environment Variables**: All sensitive data via `${VAR_NAME}` syntax; missing vars fail fast
 - **Systemd Service**: Managed deployment with automatic restarts
 - **SSH Deployment**: Remote deployment via `ops.sh`
-- **Observability**: Traces and structured logs flow through the env-driven OTLP exporter (see `telemetry/`), making them available in whichever backend `OTLP_ENDPOINT` targets.
+- **Observability**: Env-driven OTLP/HTTP to Logfire (or any collector); logs correlated as span events on the request/step trace tree.
