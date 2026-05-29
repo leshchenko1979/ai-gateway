@@ -61,7 +61,7 @@ func validateChatRequest(req *types.ChatRequest) error {
 		return fmt.Errorf("messages array is required and cannot be empty")
 	}
 
-	validRoles := []string{"system", "user", "assistant"}
+	validRoles := []string{"system", "user", "assistant", "tool"}
 
 	for i, vm := range temp.Messages {
 		if strings.TrimSpace(vm.Role) == "" {
