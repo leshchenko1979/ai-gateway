@@ -325,89 +325,16 @@ func TestClient_ConflictResolution_Tools(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create client with conflict_resolution: "tools"
+	// Create client - adapters are always on
 	cfg := config.Provider{
 		Name:    "test-provider",
 		APIKey:  "test-api-key",
 		BaseURL: server.URL,
 	}
 	step := config.RouteStep{
-		Provider:           "test-provider",
-		Model:              "gpt-4",
-		StepTimeout:        "30s",
-		ConflictResolution: "tools",
-	}
-	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, "30s", logger)
-
-	// Create request with both tools and response_format
-	requestJSON := `{"model":"original","messages":[{"role":"user","content":"Hello"}],"tools":[{"function":{"name":"test"}}],"response_format":{"type":"json_object"}}`
-	var request types.ChatRequest
-	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
-		t.Fatalf("Failed to unmarshal test request: %v", err)
-	}
-
-	_, err := client.Call(context.Background(), request)
-	if err != nil {
-		t.Fatalf("Call() error = %v", err)
-	}
-}
-
-func TestClient_ConflictResolution_Format(t *testing.T) {
-	// Create mock server that verifies conflict resolution
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check authorization header
-		auth := r.Header.Get("Authorization")
-		if auth != "Bearer test-api-key" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		// Parse received request
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		var received map[string]interface{}
-		if err := json.Unmarshal(body, &received); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		// Verify tools was removed (conflict_resolution: "format")
-		if _, exists := received["tools"]; exists {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("tools should be removed"))
-			return
-		}
-
-		// Verify response_format is still present
-		if _, exists := received["response_format"]; !exists {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("response_format should be preserved"))
-			return
-		}
-
-		// Return success response
-		responseJSON := `{"id": "test", "object": "chat.completion", "created": 123, "model": "gpt-4", "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}`
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(responseJSON))
-	}))
-	defer server.Close()
-
-	// Create client with conflict_resolution: "format"
-	cfg := config.Provider{
-		Name:    "test-provider",
-		APIKey:  "test-api-key",
-		BaseURL: server.URL,
-	}
-	step := config.RouteStep{
-		Provider:           "test-provider",
-		Model:              "gpt-4",
-		StepTimeout:        "30s",
-		ConflictResolution: "format",
+		Provider:    "test-provider",
+		Model:       "gpt-4",
+		StepTimeout: "30s",
 	}
 	logger := logger.NewLogger()
 	client := NewClientWithRouteStep(cfg, step, "30s", logger)

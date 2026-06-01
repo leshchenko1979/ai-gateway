@@ -248,24 +248,6 @@ func TestValidateConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "invalid conflict_resolution",
-			config: &Config{
-				APIKey: "test-key",
-				Providers: []Provider{
-					{Name: "test", APIKey: "key", BaseURL: "http://test.com"},
-				},
-				Routes: []Route{
-					{
-						Name: "test-model",
-						Steps: []RouteStep{
-							{Provider: "test", Model: "gpt-4", ConflictResolution: "invalid"},
-						},
-					},
-				},
-			},
-			wantErr: true,
-		},
-		{
 			name: "route missing name",
 			config: &Config{
 				APIKey: "test-key",

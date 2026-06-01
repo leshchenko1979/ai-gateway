@@ -195,12 +195,6 @@ func validateConfig(cfg *Config) error {
 			if !providerNames[step.Provider] {
 				return fmt.Errorf("route[%d] (%s) step[%d]: provider '%s' not found in providers list", i, route.Name, j, step.Provider)
 			}
-			// Validate conflict_resolution
-			if step.ConflictResolution != "" {
-				if step.ConflictResolution != "tools" && step.ConflictResolution != "format" {
-					return fmt.Errorf("route[%d] (%s) step[%d]: conflict_resolution must be 'tools' or 'format', got '%s'", i, route.Name, j, step.ConflictResolution)
-				}
-			}
 			cfg.Routes[i].Steps[j] = step
 		}
 		cfg.Routes[i] = route

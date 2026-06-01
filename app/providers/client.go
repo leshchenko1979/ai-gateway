@@ -14,29 +14,32 @@ import (
 	"ai-gateway/types"
 )
 
+// RequestAdapter adapts a chat request for provider/model peculiarities
+type RequestAdapter func(request *types.ChatRequest) error
+
 // Client implements the Provider interface for OpenAI-compatible APIs
 type Client struct {
-	name               string
-	apiKey             string
-	baseURL            string
-	model              string
-	timeout            time.Duration
-	conflictResolution string // "tools" or "format" or empty
-	logger             *logger.Logger
-	client             *http.Client
+	name      string
+	apiKey    string
+	baseURL   string
+	model     string
+	timeout   time.Duration
+	adapters  []RequestAdapter
+	logger    *logger.Logger
+	client    *http.Client
 }
 
 // NewClient creates a new OpenAI-compatible provider client
 func NewClient(cfg config.Provider, logger *logger.Logger) *Client {
 	// Legacy constructor - uses default timeout and no conflict resolution
 	return &Client{
-		name:               cfg.Name,
-		apiKey:             cfg.APIKey,
-		baseURL:            cfg.BaseURL,
-		model:              "", // Will be overridden by route step
-		timeout:            30 * time.Second,
-		conflictResolution: "",
-		logger:             logger,
+		name:     cfg.Name,
+		apiKey:   cfg.APIKey,
+		baseURL:  cfg.BaseURL,
+		model:    "", // Will be overridden by route step
+		timeout:  30 * time.Second,
+		adapters: defaultAdapters(),
+		logger:   logger,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -49,13 +52,13 @@ func NewClientWithRouteStep(providerCfg config.Provider, step config.RouteStep, 
 	timeout := config.GetStepTimeout(step.StepTimeout, defaultStepTimeout)
 
 	return &Client{
-		name:               providerCfg.Name,
-		apiKey:             providerCfg.APIKey,
-		baseURL:            providerCfg.BaseURL,
-		model:              step.Model,
-		timeout:            timeout,
-		conflictResolution: step.ConflictResolution,
-		logger:             logger,
+		name:     providerCfg.Name,
+		apiKey:   providerCfg.APIKey,
+		baseURL:  providerCfg.BaseURL,
+		model:    step.Model,
+		timeout:  timeout,
+		adapters: defaultAdapters(),
+		logger:   logger,
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -78,10 +81,10 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 	// Override model with provider's configured model
 	request.Model = c.model
 
-	// Apply conflict resolution if specified
-	if c.conflictResolution != "" {
-		if err := c.applyConflictResolution(&request); err != nil {
-			return nil, fmt.Errorf("failed to apply conflict resolution: %w", err)
+	// Apply request adapters
+	for i, adapter := range c.adapters {
+		if err := adapter(&request); err != nil {
+			return nil, fmt.Errorf("adapter[%d] failed: %w", i, err)
 		}
 	}
 
@@ -129,24 +132,25 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 	return &response, nil
 }
 
-// applyConflictResolution modifies the request to resolve tools/response_format conflicts
-func (c *Client) applyConflictResolution(request *types.ChatRequest) error {
+// defaultAdapters returns the standard set of request adapters
+func defaultAdapters() []RequestAdapter {
+	return []RequestAdapter{
+		adaptConflictResolution,
+		adaptToolChoice,
+	}
+}
+
+// adaptConflictResolution resolves tools/response_format conflicts by preferring tools
+func adaptConflictResolution(request *types.ChatRequest) error {
 	// Parse the raw JSON to manipulate it
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(request.Raw, &reqMap); err != nil {
 		return fmt.Errorf("failed to parse request JSON: %w", err)
 	}
 
-	switch c.conflictResolution {
-	case "tools":
-		// Remove response_format field, keep tools
+	// If tools are present, remove response_format to avoid conflicts
+	if _, hasTools := reqMap["tools"]; hasTools {
 		delete(reqMap, "response_format")
-	case "format":
-		// Remove tools field, keep response_format
-		delete(reqMap, "tools")
-	default:
-		// No conflict resolution needed
-		return nil
 	}
 
 	// Re-marshal the modified request
@@ -157,4 +161,44 @@ func (c *Client) applyConflictResolution(request *types.ChatRequest) error {
 
 	request.Raw = modifiedRaw
 	return nil
+}
+
+// adaptToolChoice relaxes forced tool_choice for models that don't support it
+func adaptToolChoice(request *types.ChatRequest) error {
+	// Only applies to thinking/reasoning models
+	if !isThinkingModel(request.Model) {
+		return nil
+	}
+
+	// Parse the raw JSON to manipulate it
+	var reqMap map[string]interface{}
+	if err := json.Unmarshal(request.Raw, &reqMap); err != nil {
+		return fmt.Errorf("failed to parse request JSON: %w", err)
+	}
+
+	// If tool_choice is "required", relax to "auto"
+	if tc, ok := reqMap["tool_choice"]; ok {
+		if tcStr, ok := tc.(string); ok && tcStr == "required" {
+			reqMap["tool_choice"] = "auto"
+		}
+	}
+
+	// Re-marshal the modified request
+	modifiedRaw, err := json.Marshal(reqMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal modified request: %w", err)
+	}
+
+	request.Raw = modifiedRaw
+	return nil
+}
+
+// isThinkingModel returns true if the model uses thinking/reasoning mode
+func isThinkingModel(model string) bool {
+	switch model {
+	case "deepseek-v4-flash", "deepseek/deepseek-v4-flash",
+		"deepseek-reasoner", "deepseek/deepseek-r1":
+		return true
+	}
+	return false
 }

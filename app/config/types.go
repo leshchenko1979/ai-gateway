@@ -37,10 +37,9 @@ type Route struct {
 
 // RouteStep represents a single step in a route
 type RouteStep struct {
-	Provider           string `yaml:"provider"`
-	Model              string `yaml:"model"`
-	StepTimeout        string `yaml:"step_timeout,omitempty"`
-	ConflictResolution string `yaml:"conflict_resolution,omitempty"`
+	Provider    string `yaml:"provider"`
+	Model       string `yaml:"model"`
+	StepTimeout string `yaml:"step_timeout,omitempty"`
 }
 
 // GetStepTimeout returns the timeout as a time.Duration for a route step.
