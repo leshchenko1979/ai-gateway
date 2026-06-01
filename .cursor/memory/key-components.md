@@ -22,12 +22,14 @@
 
 ### Provider Management (`providers/`)
 - **`manager.go`**: Route-based provider execution with OpenTelemetry spans
-- **`client.go`**: HTTP client with conflict resolution (no nested HTTP spans yet)
+- **`client.go`**: HTTP client with RequestAdapter pipeline (no nested HTTP spans yet)
 - **Key Functions**:
   - `Manager.GetRoute()`: Exact model name matching
   - `Manager.ExecuteWithTracing()`: Route span + per-step `step/{model}` span; `stepCtx` for logs and `provider.Call`; explicit `stepSpan.End()` per iteration (not `defer` in `for`)
   - `NewManager(cfg, ...)`: Uses config-level timeout policy (`default_route_timeout`, `route_timeout`, `step_timeout`)
-  - `Client.applyConflictResolution()`: Request field manipulation
+  - `Client.Call()` runs `RequestAdapter` pipeline before each provider call:
+    - `adaptConflictResolution`: removes `response_format` when `tools` is present (always-on)
+    - `adaptToolChoice`: downgrades `tool_choice: "required"` to `"auto"` for thinking models (deepseek v4 flash, deepseek-reasoner)
 
 ### Server Layer (`server/`)
 - **`handlers.go`**: HTTP request/response handling
@@ -77,7 +79,7 @@ graph TD
     F -->|No| G[Return 404]
     F -->|Yes| H[Execute Route Steps]
     H --> I[Create Provider Client]
-    I --> J[Apply Conflict Resolution]
+    I --> J[Apply Request Adapters]
     J --> K[Call Provider API]
     K --> L{Success?}
     L -->|No| M[Try Next Step]
@@ -97,7 +99,7 @@ graph TD
 ### Provider Communication
 - HTTP POST to `/v1/chat/completions`
 - Bearer token authentication
-- Request field manipulation for conflict resolution
+- Request field manipulation via adapter pipeline (`adaptConflictResolution`, `adaptToolChoice`)
 - Response passthrough (unchanged)
 
 ### Error Handling

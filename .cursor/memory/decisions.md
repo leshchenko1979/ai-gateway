@@ -40,6 +40,10 @@ Implement route-based provider selection where routes match incoming request mod
 
 ## Conflict Resolution Strategy
 
+> **SUPERSEDED (2026-06-01):** Replaced by always-on `RequestAdapter` pipeline in `providers/client.go`.  
+> `adaptConflictResolution` (removes `response_format` when `tools` is present) runs automatically — no config needed.  
+> The `conflict_resolution` field has been removed from `RouteStep` config. See `adapters []RequestAdapter` in `Client`.
+
 ### Decision
 Add optional `conflict_resolution` field to route steps with "tools" or "format" values.
 

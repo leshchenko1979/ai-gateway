@@ -1,5 +1,21 @@
 # Recent Changes
 
+## RequestAdapter pipeline replaces conflict_resolution config (2026-06-01)
+
+- **Problem:** `conflict_resolution: tools|format` was a manual config toggle. New model quirks (e.g. tool_choice incompatibility with thinking models) required adding config fields. Also, route authors shouldn't need to know about model-level quirks.
+- **Solution:** `RequestAdapter` pipeline — always-on adapters that detect model capabilities and adapt the request automatically. No config toggle.
+- **Config removed:** `conflict_resolution` field from `RouteStep` (types.go, config.go validation)
+- **Client changes (`providers/client.go`):**
+  - Added `type RequestAdapter func(request *types.ChatRequest) error`
+  - `Client.conflictResolution string` → `Client.adapters []RequestAdapter`
+  - `Call()` runs adapter pipeline before each provider request
+  - `defaultAdapters()` returns both adapters:
+    - `adaptConflictResolution`: removes `response_format` when `tools` is present (handles "tools" incompatibility)
+    - `adaptToolChoice`: downgrades `tool_choice: "required"` → `"auto"` for thinking models (deepseek v4 flash, deepseek-reasoner)
+  - `isThinkingModel()` helper detects thinking-capable models
+- **`config.yaml.example`:** removed `conflict_resolution: tools` from route steps
+- **Tests:** `manager_test.go`, `config_test.go`, `client_test.go` updated for always-on adapter behavior
+
 ## Logfire OTLP + trace/log correlation (2026-05-17)
 
 - **Backend:** VDS `.env` switched from Grafana Cloud OTLP to **Logfire US** (`logfire-us.pydantic.dev`); sync via `scripts/sync-config-to-vds.sh`.

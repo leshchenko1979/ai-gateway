@@ -74,7 +74,6 @@ routes:
       - provider: cerebras
         model: gpt-oss-120b
         step_timeout: 5m
-        conflict_resolution: tools
       - provider: openrouter
         model: nvidia/nemotron-3-nano-30b-a3b:free
         step_timeout: 5m
