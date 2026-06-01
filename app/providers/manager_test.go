@@ -277,34 +277,23 @@ func TestManager_Execute_ConflictResolution(t *testing.T) {
 	tests := []struct {
 		name                 string
 		routeName            string
-		conflictResolution   string
 		requestJSON          string
 		expectTools          bool
 		expectResponseFormat bool
 	}{
 		{
-			name:                 "conflict resolution tools",
+			name:                 "narrows to tools when both sent",
 			routeName:            "tools-route",
-			conflictResolution:   "tools",
 			requestJSON:          `{"model":"tools-route","messages":[{"role":"user","content":"Hello"}],"tools":[{"function":{"name":"test"}}],"response_format":{"type":"json_object"}}`,
 			expectTools:          true,
 			expectResponseFormat: false,
 		},
 		{
-			name:                 "conflict resolution format",
-			routeName:            "format-route",
-			conflictResolution:   "format",
-			requestJSON:          `{"model":"format-route","messages":[{"role":"user","content":"Hello"}],"tools":[{"function":{"name":"test"}}],"response_format":{"type":"json_object"}}`,
-			expectTools:          false,
-			expectResponseFormat: true,
-		},
-		{
-			name:                 "no conflict resolution",
+			name:                 "adapter runs regardless of config",
 			routeName:            "no-conflict-route",
-			conflictResolution:   "",
 			requestJSON:          `{"model":"no-conflict-route","messages":[{"role":"user","content":"Hello"}],"tools":[{"function":{"name":"test"}}],"response_format":{"type":"json_object"}}`,
 			expectTools:          true,
-			expectResponseFormat: true,
+			expectResponseFormat: false,
 		},
 	}
 
@@ -349,9 +338,8 @@ func TestManager_Execute_ConflictResolution(t *testing.T) {
 					Name: tt.routeName,
 					Steps: []config.RouteStep{
 						{
-							Provider:           "test-provider",
-							Model:              "gpt-4",
-							ConflictResolution: tt.conflictResolution,
+							Provider: "test-provider",
+							Model:    "gpt-4",
 						},
 					},
 				},
