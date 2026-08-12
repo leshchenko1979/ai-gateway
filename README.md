@@ -87,6 +87,10 @@ Config lookup order:
 
 Missing `${VAR}` values fail startup with a clear list, and unknown YAML fields also fail startup.
 
+## Request Adapters & Endpoint Rotation
+
+The gateway reshapes requests before sending them to a provider (thinking-model `tool_choice` relaxation, strict-JSON-schema injection for groq/cerebras, tools/`response_format` conflict resolution) and skips failing endpoints for a cooldown period (4xx errors never rotate; 429/5xx/network errors do). See [`docs/ADAPTERS.md`](docs/ADAPTERS.md) for the full adapter pipeline, rotation lifecycle, and error classification table.
+
 ## API Cheat Sheet
 
 Unauthenticated:
