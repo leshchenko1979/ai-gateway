@@ -790,3 +790,92 @@ func TestNewClientWithRouteStep_ThinkingFlagPlumbsToAdapters(t *testing.T) {
 		t.Fatalf("Call() error = %v", err)
 	}
 }
+
+// --- adaptToolChoice object-form support tests ---
+
+func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
+	tests := []struct {
+		name        string
+		thinking    bool
+		model       string
+		requestJSON string
+		wantChanged bool
+		wantRaw     string
+	}{
+		{
+			name:        "string required → auto",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "object form function → auto",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":{"type":"function","function":{"name":"final_result"}}}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "none untouched",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"none"}`,
+			wantChanged: false,
+			wantRaw:     "none",
+		},
+		{
+			name:        "auto untouched",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"auto"}`,
+			wantChanged: false,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "non-thinking object form untouched",
+			thinking:    false,
+			model:       "gpt-4", // not in hardcoded list, no flag
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":{"type":"function","function":{"name":"final_result"}}}`,
+			wantChanged: false,
+			wantRaw:     "function", // stays object form
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var request types.ChatRequest
+			if err := json.Unmarshal([]byte(tt.requestJSON), &request); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			request.Model = tt.model
+
+			changed, err := adaptToolChoiceFor(tt.thinking)(&request)
+			if err != nil {
+				t.Fatalf("adaptToolChoiceFor() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(request.Raw, &parsed); err != nil {
+				t.Fatalf("unmarshal raw: %v", err)
+			}
+			if tt.wantRaw == "function" {
+				// object form preserved — verify it's still a map with type function
+				if tc, ok := parsed["tool_choice"].(map[string]interface{}); !ok {
+					t.Fatalf("expected object-form tool_choice preserved, got %v", parsed["tool_choice"])
+				} else if tc["type"] != "function" {
+					t.Fatalf("expected type=function preserved, got %v", tc["type"])
+				}
+				return
+			}
+			got, _ := parsed["tool_choice"].(string)
+			if got != tt.wantRaw {
+				t.Fatalf("tool_choice = %q, want %q", got, tt.wantRaw)
+			}
+		})
+	}
+}

@@ -210,6 +210,14 @@ func adaptersForProvider(cfg config.Provider, thinking bool) []namedAdapter {
 // thinking=true it relaxes forced tool_choice unconditionally (the model uses
 // thinking mode, whatever its name). With thinking=false it falls back to the
 // hardcoded isThinkingModel list — backward compatible.
+//
+// Both tool_choice shapes are handled for thinking models:
+//   - string "required" → "auto"
+//   - object {"type":"function","function":{"name":…}} → "auto"
+//
+// Thinking models reject forced choice in any form, so an explicit function
+// name is overridden (consistent with the string behavior, and documented in
+// .cursor/memory/decisions.md). Anything else ("none", "auto") is untouched.
 func adaptToolChoiceFor(thinking bool) RequestAdapter {
 	return func(request *types.ChatRequest) (bool, error) {
 		if !thinking && !isThinkingModel(request.Model) {
@@ -222,12 +230,21 @@ func adaptToolChoiceFor(thinking bool) RequestAdapter {
 			return false, fmt.Errorf("failed to parse request JSON: %w", err)
 		}
 
-		// If tool_choice is "required", relax to "auto"
+		// If tool_choice is forced in any form, relax to "auto".
 		changed := false
 		if tc, ok := reqMap["tool_choice"]; ok {
-			if tcStr, ok := tc.(string); ok && tcStr == "required" {
-				reqMap["tool_choice"] = "auto"
-				changed = true
+			switch tcVal := tc.(type) {
+			case string:
+				if tcVal == "required" {
+					reqMap["tool_choice"] = "auto"
+					changed = true
+				}
+			case map[string]interface{}:
+				// object form {"type":"function",...} — forced choice.
+				if t, _ := tcVal["type"].(string); t == "function" {
+					reqMap["tool_choice"] = "auto"
+					changed = true
+				}
 			}
 		}
 		if !changed {
