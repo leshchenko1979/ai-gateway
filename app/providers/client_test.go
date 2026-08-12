@@ -368,3 +368,100 @@ func TestNewClientWithRouteStep_UsesFallbackWhenStepTimeoutEmpty(t *testing.T) {
 		t.Fatalf("client timeout = %v, want %v", client.client.Timeout, 2*time.Minute)
 	}
 }
+
+// --- Strict JSON schema adapter tests ---
+
+func TestClient_StrictSchemaAdapter_AppliesForStrictProviders(t *testing.T) {
+	// Echo server captures the received body.
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &received); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	// Provider with StrictJSONSchema=true (e.g. groq).
+	cfg := config.Provider{Name: "groq", APIKey: "k", BaseURL: server.URL, StrictJSONSchema: true}
+	step := config.RouteStep{Provider: "groq", Model: "gpt-4"}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger())
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"spam","schema":{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"object","properties":{"c":{"type":"boolean"}}}},"required":["a"]}}}}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	rf := received["response_format"].(map[string]interface{})
+	js := rf["json_schema"].(map[string]interface{})
+	schema := js["schema"].(map[string]interface{})
+	if ap, ok := schema["additionalProperties"]; !ok || ap != false {
+		t.Fatalf("expected additionalProperties:false on root object, got %v", schema["additionalProperties"])
+	}
+	props := schema["properties"].(map[string]interface{})
+	nested := props["b"].(map[string]interface{})
+	if ap, ok := nested["additionalProperties"]; !ok || ap != false {
+		t.Fatalf("expected additionalProperties:false on nested object b, got %v", nested["additionalProperties"])
+	}
+}
+
+func TestClient_StrictSchemaAdapter_DoesNotApplyForNonStrictProviders(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	// Provider WITHOUT StrictJSONSchema (e.g. opencode) — request must pass through unchanged.
+	cfg := config.Provider{Name: "opencode", APIKey: "k", BaseURL: server.URL}
+	step := config.RouteStep{Provider: "opencode", Model: "deepseek-v4-flash"}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger())
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"spam","schema":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}}}}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	rf := received["response_format"].(map[string]interface{})
+	js := rf["json_schema"].(map[string]interface{})
+	schema := js["schema"].(map[string]interface{})
+	if _, exists := schema["additionalProperties"]; exists {
+		t.Fatalf("additionalProperties should NOT be added for non-strict provider, got %v", schema["additionalProperties"])
+	}
+}
+
+func TestClient_StrictSchemaAdapter_NoSchemaLeavesRequestUntouched(t *testing.T) {
+	// Request without response_format.json_schema must pass through unchanged.
+	cfg := config.Provider{Name: "groq", APIKey: "k", BaseURL: "https://example.com", StrictJSONSchema: true}
+	step := config.RouteStep{Provider: "groq", Model: "gpt-4"}
+	_ = NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger())
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}]}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if err := adaptStrictJSONSchema(&request); err != nil {
+		t.Fatalf("adaptStrictJSONSchema() error = %v", err)
+	}
+	if string(request.Raw) != requestJSON {
+		t.Fatalf("request was modified without json_schema: %s", string(request.Raw))
+	}
+}

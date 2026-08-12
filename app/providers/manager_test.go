@@ -640,3 +640,242 @@ func TestManager_ExecuteWithTracing_CanceledContext(t *testing.T) {
 		t.Fatalf("did not expect RouteTimeoutError for canceled context")
 	}
 }
+
+// --- Endpoint rotation (circuit breaker) tests ---
+
+// successServer returns a handler that always replies with a valid chat completion.
+func successServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		responseJSON := `{
+			"id": "test-id", "object": "chat.completion", "created": 1234567890, "model": "gpt-4",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(responseJSON))
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+// failingServer returns a handler that always returns 500.
+func failingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func mustRequest(t *testing.T, routeName string) types.ChatRequest {
+	t.Helper()
+	requestJSON := `{"model":"` + routeName + `","messages":[{"role":"user","content":"Hello"}]}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("Failed to unmarshal test request: %v", err)
+	}
+	return request
+}
+
+func TestManager_Rotation_FailedStepSkippedOnNextCall(t *testing.T) {
+	badServer := failingServer(t)
+	goodServer := successServer(t)
+
+	providers := []config.Provider{
+		{Name: "bad", APIKey: "k", BaseURL: badServer.URL},
+		{Name: "good", APIKey: "k", BaseURL: goodServer.URL},
+	}
+	routes := []config.Route{
+		{
+			Name: "rot-route",
+			Steps: []config.RouteStep{
+				{Provider: "bad", Model: "gpt-4"},
+				{Provider: "good", Model: "gpt-4"},
+			},
+		},
+	}
+	// Short cooldown so the test is fast; long enough to observe the skip.
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+
+	request := mustRequest(t, "rot-route")
+
+	// First call: bad provider fails → gateway falls through to good → success.
+	resp, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if resp == nil || resp.RoutingSummary == nil {
+		t.Fatalf("expected routing summary, got resp=%v", resp)
+	}
+	if len(resp.RoutingSummary.Steps) != 2 {
+		t.Fatalf("expected 2 steps tried on first call, got %d", len(resp.RoutingSummary.Steps))
+	}
+
+	// Second call: bad provider is in cooldown → skipped, only good tried.
+	resp2, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if resp2 == nil || resp2.RoutingSummary == nil {
+		t.Fatalf("expected routing summary on second call")
+	}
+	if len(resp2.RoutingSummary.Steps) != 2 {
+		t.Fatalf("expected 2 entries (1 skipped + 1 success) on second call, got %d", len(resp2.RoutingSummary.Steps))
+	}
+	first := resp2.RoutingSummary.Steps[0]
+	if first.Provider != "bad" || first.Success {
+		t.Fatalf("expected first step marked as skipped/failed, got %+v", first)
+	}
+	if !strings.Contains(first.Error, "cooldown") {
+		t.Fatalf("expected skip reason mentioning cooldown, got %q", first.Error)
+	}
+	if !resp2.RoutingSummary.Steps[1].Success {
+		t.Fatalf("expected second step to succeed, got %+v", resp2.RoutingSummary.Steps[1])
+	}
+}
+
+func TestManager_Rotation_SuccessClearsFailureMark(t *testing.T) {
+	// bad server fails once, then succeeds (to simulate recovery)
+	call := 0
+	flaky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		if call == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer flaky.Close()
+
+	providers := []config.Provider{{Name: "flaky", APIKey: "k", BaseURL: flaky.URL}}
+	routes := []config.Route{
+		{Name: "clear-route", Steps: []config.RouteStep{{Provider: "flaky", Model: "gpt-4"}}},
+	}
+	// Short cooldown: after it expires the step is re-tried; a success then clears the mark.
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "300ms",
+	})
+
+	request := mustRequest(t, "clear-route")
+
+	// First call fails → step marked.
+	if _, err := manager.Execute(request); err == nil {
+		t.Fatal("expected first Execute() to fail")
+	}
+	key := cooldownKey("clear-route", routes[0].Steps[0])
+	if !manager.stepInCooldown(key) {
+		t.Fatal("expected step to be in cooldown after failure")
+	}
+
+	// Wait for cooldown to expire so the step gets re-tried.
+	time.Sleep(400 * time.Millisecond)
+
+	// Second call: flaky now succeeds → mark cleared.
+	resp, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if resp == nil || len(resp.RoutingSummary.Steps) == 0 || !resp.RoutingSummary.Steps[0].Success {
+		t.Fatalf("expected success on second call, got %+v", resp)
+	}
+	if manager.stepInCooldown(key) {
+		t.Fatal("expected cooldown mark to be cleared after success")
+	}
+}
+
+func TestManager_Rotation_ClientCancelDoesNotMark(t *testing.T) {
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer func() {
+		close(release)
+		slow.Close()
+	}()
+
+	providers := []config.Provider{{Name: "slow", APIKey: "k", BaseURL: slow.URL}}
+	routes := []config.Route{
+		{Name: "cancel-route2", Steps: []config.RouteStep{{Provider: "slow", Model: "gpt-4"}}},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+
+	request := mustRequest(t, "cancel-route2")
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after a short delay so the request is in flight when canceled.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := manager.ExecuteWithTracing(ctx, request, "req-cancel2")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %T: %v", err, err)
+	}
+
+	if manager.stepInCooldown(cooldownKey("cancel-route2", routes[0].Steps[0])) {
+		t.Fatal("client-canceled request must NOT mark the step for rotation")
+	}
+}
+
+func TestManager_Rotation_CooldownExpiryReenables(t *testing.T) {
+	badServer := failingServer(t)
+	goodServer := successServer(t)
+
+	providers := []config.Provider{
+		{Name: "bad", APIKey: "k", BaseURL: badServer.URL},
+		{Name: "good", APIKey: "k", BaseURL: goodServer.URL},
+	}
+	routes := []config.Route{
+		{Name: "expire-route", Steps: []config.RouteStep{
+			{Provider: "bad", Model: "gpt-4"},
+			{Provider: "good", Model: "gpt-4"},
+		}},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "1s", // short cooldown — expires quickly
+	})
+
+	request := mustRequest(t, "expire-route")
+
+	// First call fails bad → marked.
+	if _, err := manager.Execute(request); err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if !manager.stepInCooldown(cooldownKey("expire-route", routes[0].Steps[0])) {
+		t.Fatal("expected step in cooldown after failure")
+	}
+
+	// Wait for cooldown to expire.
+	time.Sleep(1100 * time.Millisecond)
+
+	// Next call tries bad again (2 steps tried, bad attempted and failed again).
+	resp, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("Execute() after expiry error = %v", err)
+	}
+	if len(resp.RoutingSummary.Steps) != 2 {
+		t.Fatalf("expected bad to be re-tried after expiry (2 steps), got %d", len(resp.RoutingSummary.Steps))
+	}
+	if resp.RoutingSummary.Steps[0].Success {
+		t.Fatal("expected bad step to fail again after re-enable")
+	}
+}

@@ -10,6 +10,7 @@ type Config struct {
 	Port                int        `yaml:"port"`
 	DefaultStepTimeout  string     `yaml:"default_step_timeout,omitempty"`
 	DefaultRouteTimeout string     `yaml:"default_route_timeout,omitempty"`
+	DefaultStepCooldown string     `yaml:"default_step_cooldown,omitempty"` // Rotation: skip a step after failure for this long
 	Providers           []Provider `yaml:"providers"`
 	Routes              []Route    `yaml:"routes"`
 	EnvVars             []string   `yaml:"-"`
@@ -17,21 +18,24 @@ type Config struct {
 
 const (
 	fallbackStepTimeout      = 30 * time.Second
+	fallbackStepCooldown     = 60 * time.Second
 	minHTTPServerTimeout     = 30 * time.Second
 	defaultRouteTimeoutValue = 30 * time.Second
 )
 
 // Provider represents a single AI provider configuration
 type Provider struct {
-	Name    string `yaml:"name"`
-	APIKey  string `yaml:"api_key"`
-	BaseURL string `yaml:"base_url"`
+	Name             string `yaml:"name"`
+	APIKey           string `yaml:"api_key"`
+	BaseURL          string `yaml:"base_url"`
+	StrictJSONSchema bool   `yaml:"strict_json_schema,omitempty"` // Requires additionalProperties:false in json_schema (groq, cerebras)
 }
 
 // Route represents a route configuration that matches incoming request models
 type Route struct {
 	Name         string      `yaml:"name"`
 	RouteTimeout string      `yaml:"route_timeout,omitempty"`
+	StepCooldown string      `yaml:"step_cooldown,omitempty"` // Overrides DefaultStepCooldown for this route
 	Steps        []RouteStep `yaml:"steps"`
 }
 
@@ -56,6 +60,22 @@ func GetStepTimeout(stepTimeout, defaultStepTimeout string) time.Duration {
 		return fallbackStepTimeout
 	}
 	return duration
+}
+
+// GetStepCooldown returns the step cooldown duration for a route.
+// Route-level step_cooldown wins; then default_step_cooldown; then a 60s default.
+func (c *Config) GetStepCooldown(route Route) time.Duration {
+	value := route.StepCooldown
+	if value == "" {
+		value = c.DefaultStepCooldown
+	}
+	if value == "" {
+		return fallbackStepCooldown
+	}
+	if duration, err := time.ParseDuration(value); err == nil {
+		return duration
+	}
+	return fallbackStepCooldown
 }
 
 // GetRouteTimeout resolves the effective timeout for a route.

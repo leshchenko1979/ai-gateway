@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"ai-gateway/config"
@@ -26,6 +27,12 @@ type Manager struct {
 	config    *config.Config
 	logger    *logger.Logger
 	tracer    trace.Tracer
+
+	// stepCooldowns tracks provider:model failures for endpoint rotation.
+	// A step that failed recently is skipped on subsequent requests until the
+	// cooldown expires, so a flaky endpoint stops burning the route budget.
+	mu            sync.Mutex
+	stepCooldowns map[string]time.Time // "route/provider/model" -> cooldown until
 }
 
 // NewManager creates a new provider manager.
@@ -48,12 +55,51 @@ func NewManager(cfg *config.Config, logger *logger.Logger) (*Manager, error) {
 	}
 
 	return &Manager{
-		providers: providerMap,
-		routes:    cfg.Routes,
-		config:    cfg,
-		logger:    logger,
-		tracer:    telemetry.Tracer("ai-gateway.providers"),
+		providers:     providerMap,
+		routes:        cfg.Routes,
+		config:        cfg,
+		logger:        logger,
+		tracer:        telemetry.Tracer("ai-gateway.providers"),
+		stepCooldowns: make(map[string]time.Time),
 	}, nil
+}
+
+// cooldownKey builds a unique key for a route step.
+func cooldownKey(routeName string, step config.RouteStep) string {
+	return routeName + "/" + step.Provider + "/" + step.Model
+}
+
+// stepInCooldown reports whether the step is currently cooling down.
+func (m *Manager) stepInCooldown(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	until, ok := m.stepCooldowns[key]
+	return ok && time.Now().Before(until)
+}
+
+// markStepFailed records a step failure and sets its cooldown expiry.
+func (m *Manager) markStepFailed(route config.Route, step config.RouteStep) {
+	cooldown := m.config.GetStepCooldown(route)
+	key := cooldownKey(route.Name, step)
+	m.mu.Lock()
+	m.stepCooldowns[key] = time.Now().Add(cooldown)
+	m.mu.Unlock()
+	m.logger.Info(context.Background(), "Step marked for rotation (will be skipped)",
+		map[string]interface{}{
+			"route":       route.Name,
+			"provider":    step.Provider,
+			"model":       step.Model,
+			"cooldown":    cooldown.String(),
+			"cooldownKey": key,
+		})
+}
+
+// clearStepFailure removes a step's cooldown mark after a successful call.
+func (m *Manager) clearStepFailure(routeName string, step config.RouteStep) {
+	key := cooldownKey(routeName, step)
+	m.mu.Lock()
+	delete(m.stepCooldowns, key)
+	m.mu.Unlock()
 }
 
 // GetRoute finds a route by exact model name match
@@ -114,6 +160,30 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			routeSpan.RecordError(err)
 			routeSpan.SetStatus(codes.Error, err.Error())
 			return nil, err
+		}
+
+		// Endpoint rotation: skip steps still in cooldown after a recent failure.
+		key := cooldownKey(route.Name, step)
+		if m.stepInCooldown(key) {
+			skipFields := map[string]interface{}{
+				"provider": step.Provider,
+				"model":    step.Model,
+				"route":    route.Name,
+				"step":     stepIndex,
+			}
+			if requestID != "" {
+				skipFields["request_id"] = requestID
+			}
+			m.logger.Info(routeCtx, "Skipping route step (in cooldown)", skipFields)
+			stepResults = append(stepResults, types.RouteStepResult{
+				StepIndex:  stepIndex,
+				Provider:   step.Provider,
+				Model:      step.Model,
+				Success:    false,
+				DurationMs: 0,
+				Error:      "skipped (in cooldown)",
+			})
+			continue
 		}
 
 		stepCtx, stepSpan := m.tracer.Start(routeCtx, fmt.Sprintf("step/%s", step.Model),
@@ -186,6 +256,9 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			if isRouteCanceled(err, routeCtx) {
 				return nil, context.Canceled
 			}
+			// Endpoint rotation: real provider failure (not client cancel) → mark
+			// the step so the NEXT request skips it during the cooldown window.
+			m.markStepFailed(*route, step)
 			continue
 		}
 
@@ -218,6 +291,9 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			Success:    true,
 			DurationMs: duration.Milliseconds(),
 		})
+
+		// Endpoint rotation: a successful call clears the step's failure mark.
+		m.clearStepFailure(route.Name, step)
 
 		// Attach routing summary to response
 		response.RoutingSummary = &types.RoutingSummary{
