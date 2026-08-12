@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,25 @@ import (
 
 // RequestAdapter adapts a chat request for provider/model peculiarities
 type RequestAdapter func(request *types.ChatRequest) error
+
+// ErrRequestAdapter marks failures caused by the request adapter pipeline
+// itself (a gateway bug or an unshapable request), not by the provider. These
+// are provider-independent — the same Raw fails identically on every provider —
+// so they must never trigger endpoint rotation.
+var ErrRequestAdapter = errors.New("request adapter failed")
+
+// HTTPStatusError reports a non-200 response from a provider. The manager uses
+// the StatusCode to classify rotation: 4xx (except 429) are request-shape
+// faults (permanent or client-fixable — rotation is futile), while 429/5xx and
+// network errors are provider health faults (rotation helps).
+type HTTPStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("provider returned status %d: %s", e.StatusCode, e.Body)
+}
 
 // Client implements the Provider interface for OpenAI-compatible APIs
 type Client struct {
@@ -84,7 +104,7 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 	// Apply request adapters
 	for i, adapter := range c.adapters {
 		if err := adapter(&request); err != nil {
-			return nil, fmt.Errorf("adapter[%d] failed: %w", i, err)
+			return nil, fmt.Errorf("%w: adapter[%d] failed: %w", ErrRequestAdapter, i, err)
 		}
 	}
 
@@ -120,7 +140,7 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 
 	// Check HTTP status
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("provider returned status %d: %s", resp.StatusCode, string(body))
+		return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	// Store response as raw JSON (pass through unchanged)

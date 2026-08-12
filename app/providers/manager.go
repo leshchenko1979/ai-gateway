@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -101,6 +102,11 @@ func (m *Manager) clearStepFailure(routeName string, step config.RouteStep) {
 	delete(m.stepCooldowns, key)
 	m.mu.Unlock()
 }
+
+// newStepClient constructs the provider client for a route step. Package-level
+// var so tests can inject clients with custom adapters (e.g. a failing adapter
+// to verify the adapter-error short-circuit path).
+var newStepClient = NewClientWithRouteStep
 
 // GetRoute finds a route by exact model name match
 func (m *Manager) GetRoute(model string) (*config.Route, error) {
@@ -208,7 +214,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 		m.logger.Info(stepCtx, "Trying route step", fields)
 
 		start := time.Now()
-		provider := NewClientWithRouteStep(providerCfg, step, m.config.DefaultStepTimeout, m.logger)
+		provider := newStepClient(providerCfg, step, m.config.DefaultStepTimeout, m.logger)
 		response, err := provider.Call(stepCtx, request)
 		duration := time.Since(start)
 
@@ -224,6 +230,10 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			}
 			if requestID != "" {
 				errorFields["request_id"] = requestID
+			}
+			var httpErr *HTTPStatusError
+			if errors.As(err, &httpErr) {
+				errorFields["status_code"] = httpErr.StatusCode
 			}
 
 			m.logger.Error(stepCtx, "Route step failed", err, errorFields)
@@ -256,9 +266,19 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			if isRouteCanceled(err, routeCtx) {
 				return nil, context.Canceled
 			}
-			// Endpoint rotation: real provider failure (not client cancel) → mark
-			// the step so the NEXT request skips it during the cooldown window.
-			m.markStepFailed(*route, step)
+			// Adapter failures are gateway-side bugs or unshapable requests —
+			// the same Raw fails identically on every provider, so trying the
+			// rest is wasted latency. Fail immediately, never mark rotation.
+			if errors.Is(err, ErrRequestAdapter) {
+				return nil, err
+			}
+			// Endpoint rotation: mark only real provider *health* faults
+			// (5xx, 429, network, timeout). Never 4xx shape faults (400/422 —
+			// permanent or client-fixable, rotation is futile and would mask
+			// the real cause), never adapter bugs (provider-independent).
+			if isRotatableError(err) {
+				m.markStepFailed(*route, step)
+			}
 			continue
 		}
 
@@ -341,4 +361,23 @@ func isRouteDeadlineExceeded(routeCtx context.Context) bool {
 
 func isRouteCanceled(err error, routeCtx context.Context) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(routeCtx.Err(), context.Canceled)
+}
+
+// isRotatableError reports whether a step failure is a provider *health* fault.
+// 4xx (except 429) are request-shape / permanent faults → do NOT rotate.
+// 429, 5xx, network errors, timeouts = health fault → rotate.
+// Adapter errors are gateway bugs, provider-independent → rotation is
+// meaningless, never mark.
+func isRotatableError(err error) bool {
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) {
+		if httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 && httpErr.StatusCode != http.StatusTooManyRequests {
+			return false
+		}
+		return true
+	}
+	if errors.Is(err, ErrRequestAdapter) {
+		return false // gateway bug, provider-independent — rotation is meaningless
+	}
+	return true // network / timeout / unknown
 }

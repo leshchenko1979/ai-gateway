@@ -879,3 +879,185 @@ func TestManager_Rotation_CooldownExpiryReenables(t *testing.T) {
 		t.Fatal("expected bad step to fail again after re-enable")
 	}
 }
+
+// --- Error classification (4xx vs 5xx rotation) tests ---
+
+// statusServer returns a handler that always replies with the given status code.
+func statusServer(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func TestManager_Rotation_BadRequestDoesNotMark(t *testing.T) {
+	badServer := statusServer(t, http.StatusBadRequest)
+	goodServer := successServer(t)
+
+	providers := []config.Provider{
+		{Name: "bad400", APIKey: "k", BaseURL: badServer.URL},
+		{Name: "good", APIKey: "k", BaseURL: goodServer.URL},
+	}
+	routes := []config.Route{
+		{
+			Name: "rot-400",
+			Steps: []config.RouteStep{
+				{Provider: "bad400", Model: "gpt-4"},
+				{Provider: "good", Model: "gpt-4"},
+			},
+		},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+
+	request := mustRequest(t, "rot-400")
+
+	resp, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if len(resp.RoutingSummary.Steps) != 2 {
+		t.Fatalf("expected 2 steps tried on first call, got %d", len(resp.RoutingSummary.Steps))
+	}
+
+	key := cooldownKey("rot-400", routes[0].Steps[0])
+	if manager.stepInCooldown(key) {
+		t.Fatal("400 must NOT mark the step for rotation (request-shape fault, endpoint healthy)")
+	}
+
+	resp2, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if len(resp2.RoutingSummary.Steps) != 2 {
+		t.Fatalf("expected 2 steps tried on second call (bad400 re-tried), got %d", len(resp2.RoutingSummary.Steps))
+	}
+	first := resp2.RoutingSummary.Steps[0]
+	if first.Success {
+		t.Fatalf("expected bad400 step to fail again (still returning 400), got success")
+	}
+	if strings.Contains(first.Error, "cooldown") {
+		t.Fatalf("expected bad400 to be actually tried (not skipped), got skip: %q", first.Error)
+	}
+}
+
+func TestManager_Rotation_RateLimitMarks(t *testing.T) {
+	badServer := statusServer(t, http.StatusTooManyRequests)
+	goodServer := successServer(t)
+
+	providers := []config.Provider{
+		{Name: "bad429", APIKey: "k", BaseURL: badServer.URL},
+		{Name: "good", APIKey: "k", BaseURL: goodServer.URL},
+	}
+	routes := []config.Route{
+		{
+			Name: "rot-429",
+			Steps: []config.RouteStep{
+				{Provider: "bad429", Model: "gpt-4"},
+				{Provider: "good", Model: "gpt-4"},
+			},
+		},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+
+	request := mustRequest(t, "rot-429")
+
+	resp, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if len(resp.RoutingSummary.Steps) != 2 {
+		t.Fatalf("expected 2 steps tried on first call, got %d", len(resp.RoutingSummary.Steps))
+	}
+
+	key := cooldownKey("rot-429", routes[0].Steps[0])
+	if !manager.stepInCooldown(key) {
+		t.Fatal("429 must mark the step for rotation (capacity signal, cooldown gives it room)")
+	}
+
+	resp2, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	first := resp2.RoutingSummary.Steps[0]
+	if !strings.Contains(first.Error, "cooldown") {
+		t.Fatalf("expected bad429 skipped (in cooldown), got %q", first.Error)
+	}
+	if !resp2.RoutingSummary.Steps[1].Success {
+		t.Fatalf("expected good step to succeed, got %+v", resp2.RoutingSummary.Steps[1])
+	}
+}
+
+func TestManager_Rotation_AdapterErrorFailsImmediatelyNotMarked(t *testing.T) {
+	var goodCalls int
+	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		goodCalls++
+		responseJSON := `{
+			"id": "test-id", "object": "chat.completion", "created": 1234567890, "model": "gpt-4",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(responseJSON))
+	}))
+	t.Cleanup(goodServer.Close)
+
+	providers := []config.Provider{
+		{Name: "p1", APIKey: "k", BaseURL: goodServer.URL},
+		{Name: "p2", APIKey: "k", BaseURL: goodServer.URL},
+	}
+	routes := []config.Route{
+		{
+			Name: "rot-adapter",
+			Steps: []config.RouteStep{
+				{Provider: "p1", Model: "gpt-4"},
+				{Provider: "p2", Model: "gpt-4"},
+			},
+		},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+
+	origNewStepClient := newStepClient
+	defer func() { newStepClient = origNewStepClient }()
+	newStepClient = func(providerCfg config.Provider, step config.RouteStep, defaultStepTimeout string, l *logger.Logger) *Client {
+		c := NewClientWithRouteStep(providerCfg, step, defaultStepTimeout, l)
+		c.adapters = []RequestAdapter{
+			func(request *types.ChatRequest) error {
+				return fmt.Errorf("boom: unshapable request")
+			},
+		}
+		return c
+	}
+
+	request := mustRequest(t, "rot-adapter")
+
+	_, err := manager.Execute(request)
+	if err == nil {
+		t.Fatal("expected adapter error to fail the request immediately")
+	}
+	if !errors.Is(err, ErrRequestAdapter) {
+		t.Fatalf("expected ErrRequestAdapter, got %T: %v", err, err)
+	}
+
+	if goodCalls != 0 {
+		t.Fatalf("adapter failure must short-circuit: remaining provider called %d times, want 0", goodCalls)
+	}
+
+	key := cooldownKey("rot-adapter", routes[0].Steps[0])
+	if manager.stepInCooldown(key) {
+		t.Fatal("adapter error must NOT mark the step for rotation (gateway bug, provider-independent)")
+	}
+}
