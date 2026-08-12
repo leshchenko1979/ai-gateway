@@ -212,8 +212,14 @@ func ValidateTimeoutSettings(cfg *Config) error {
 	if err := parseOptionalDuration(cfg.DefaultStepTimeout, "default_step_timeout: invalid duration format"); err != nil {
 		return err
 	}
+	if err := parseOptionalDuration(cfg.DefaultStepCooldown, "default_step_cooldown: invalid duration format"); err != nil {
+		return err
+	}
 	for i, route := range cfg.Routes {
 		if err := parseOptionalDuration(route.RouteTimeout, fmt.Sprintf("route[%d] (%s): invalid route_timeout format", i, route.Name)); err != nil {
+			return err
+		}
+		if err := parseOptionalDuration(route.StepCooldown, fmt.Sprintf("route[%d] (%s): invalid step_cooldown format", i, route.Name)); err != nil {
 			return err
 		}
 		for j, step := range route.Steps {

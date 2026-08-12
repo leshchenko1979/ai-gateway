@@ -10,6 +10,7 @@ type Config struct {
 	Port                int        `yaml:"port"`
 	DefaultStepTimeout  string     `yaml:"default_step_timeout,omitempty"`
 	DefaultRouteTimeout string     `yaml:"default_route_timeout,omitempty"`
+	DefaultStepCooldown string     `yaml:"default_step_cooldown,omitempty"` // Rotation: skip a step after failure for this long
 	Providers           []Provider `yaml:"providers"`
 	Routes              []Route    `yaml:"routes"`
 	EnvVars             []string   `yaml:"-"`
@@ -34,6 +35,7 @@ type Provider struct {
 type Route struct {
 	Name         string      `yaml:"name"`
 	RouteTimeout string      `yaml:"route_timeout,omitempty"`
+	StepCooldown string      `yaml:"step_cooldown,omitempty"` // Overrides DefaultStepCooldown for this route
 	Steps        []RouteStep `yaml:"steps"`
 }
 
