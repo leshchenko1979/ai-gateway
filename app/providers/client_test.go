@@ -604,7 +604,7 @@ func TestClient_AdaptToolChoice_ChangedFlag(t *testing.T) {
 			// Set model the way Call() does.
 			request.Model = tt.model
 
-			changed, err := adaptToolChoice(&request)
+			changed, err := adaptToolChoiceFor(false)(&request)
 			if err != nil {
 				t.Fatalf("adaptToolChoice() error = %v", err)
 			}
@@ -684,5 +684,109 @@ func TestClient_AdaptConflictResolution_MutationDetection(t *testing.T) {
 				t.Fatalf("expected response_format preserved: %s", string(request.Raw))
 			}
 		})
+	}
+}
+
+// --- Config-driven thinking flag tests ---
+
+func TestClient_AdaptToolChoiceFor_ThinkingFlag(t *testing.T) {
+	tests := []struct {
+		name        string
+		thinking    bool
+		model       string // NOT in the hardcoded isThinkingModel list unless noted
+		requestJSON string
+		wantChanged bool
+		wantRaw     string
+	}{
+		{
+			name:        "thinking:true + model not in hardcoded list → relaxed",
+			thinking:    true,
+			model:       "gpt-oss-120b", // new thinking model, not in isThinkingModel
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "thinking:false + model not in hardcoded list → untouched",
+			thinking:    false,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: false,
+			wantRaw:     "required",
+		},
+		{
+			name:        "thinking:false + listed model → still relaxed (fallback)",
+			thinking:    false,
+			model:       "deepseek-v4-flash", // in isThinkingModel
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "thinking:true + no tool_choice → untouched",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}]}`,
+			wantChanged: false,
+			wantRaw:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var request types.ChatRequest
+			if err := json.Unmarshal([]byte(tt.requestJSON), &request); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			request.Model = tt.model
+
+			changed, err := adaptToolChoiceFor(tt.thinking)(&request)
+			if err != nil {
+				t.Fatalf("adaptToolChoiceFor() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(request.Raw, &parsed); err != nil {
+				t.Fatalf("unmarshal raw: %v", err)
+			}
+			got, _ := parsed["tool_choice"].(string)
+			if got != tt.wantRaw {
+				t.Fatalf("tool_choice = %q, want %q", got, tt.wantRaw)
+			}
+		})
+	}
+}
+
+func TestNewClientWithRouteStep_ThinkingFlagPlumbsToAdapters(t *testing.T) {
+	// thinking:true on the step must reach adapter selection — the tool-choice
+	// adapter for a non-listed model must relax tool_choice.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var received map[string]interface{}
+		_ = json.Unmarshal(body, &received)
+		if tc, _ := received["tool_choice"].(string); tc != "auto" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("tool_choice not relaxed"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	cfg := config.Provider{Name: "p", APIKey: "k", BaseURL: server.URL}
+	step := config.RouteStep{Provider: "p", Model: "gpt-oss-120b", Thinking: true}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "thinking-route")
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
 	}
 }

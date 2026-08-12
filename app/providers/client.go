@@ -90,7 +90,7 @@ func NewClientWithRouteStep(providerCfg config.Provider, step config.RouteStep, 
 		baseURL:   providerCfg.BaseURL,
 		model:     step.Model,
 		timeout:   timeout,
-		adapters:  adaptersForProvider(providerCfg),
+		adapters:  adaptersForProvider(providerCfg, step.Thinking),
 		logger:    logger,
 		client:    &http.Client{Timeout: timeout},
 		routeName: routeName,
@@ -180,56 +180,69 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 func defaultAdapters() []namedAdapter {
 	return []namedAdapter{
 		{name: "conflict-resolution", fn: adaptConflictResolution},
-		{name: "tool-choice", fn: adaptToolChoice},
+		{name: "tool-choice", fn: adaptToolChoiceFor(false)},
 	}
 }
 
 // adaptersForProvider returns the adapter pipeline for a provider.
 // Providers with StrictJSONSchema=true get the strict-schema adapter injected
 // (groq/cerebras require additionalProperties:false; opencode rejects it, so
-// it must NOT be global).
-func adaptersForProvider(cfg config.Provider) []namedAdapter {
+// it must NOT be global). thinking marks the step's model as using thinking
+// mode → the tool-choice adapter relaxes forced tool_choice unconditionally.
+func adaptersForProvider(cfg config.Provider, thinking bool) []namedAdapter {
 	adapters := defaultAdapters()
 	if cfg.StrictJSONSchema {
 		adapters = append(adapters, namedAdapter{name: "strict-json-schema", fn: adaptStrictJSONSchema})
 	}
+	if thinking {
+		// Replace the fallback-gated tool-choice adapter with the
+		// unconditional one.
+		for i := range adapters {
+			if adapters[i].name == "tool-choice" {
+				adapters[i].fn = adaptToolChoiceFor(true)
+			}
+		}
+	}
 	return adapters
 }
 
-// adaptToolChoice relaxes forced tool_choice for models that don't support it.
-// Returns true only when tool_choice was actually rewritten.
-func adaptToolChoice(request *types.ChatRequest) (bool, error) {
-	// Only applies to thinking/reasoning models
-	if !isThinkingModel(request.Model) {
-		return false, nil
-	}
-
-	// Parse the raw JSON to manipulate it
-	var reqMap map[string]interface{}
-	if err := json.Unmarshal(request.Raw, &reqMap); err != nil {
-		return false, fmt.Errorf("failed to parse request JSON: %w", err)
-	}
-
-	// If tool_choice is "required", relax to "auto"
-	changed := false
-	if tc, ok := reqMap["tool_choice"]; ok {
-		if tcStr, ok := tc.(string); ok && tcStr == "required" {
-			reqMap["tool_choice"] = "auto"
-			changed = true
+// adaptToolChoiceFor returns the tool-choice adapter for a step. With
+// thinking=true it relaxes forced tool_choice unconditionally (the model uses
+// thinking mode, whatever its name). With thinking=false it falls back to the
+// hardcoded isThinkingModel list — backward compatible.
+func adaptToolChoiceFor(thinking bool) RequestAdapter {
+	return func(request *types.ChatRequest) (bool, error) {
+		if !thinking && !isThinkingModel(request.Model) {
+			return false, nil
 		}
-	}
-	if !changed {
-		return false, nil
-	}
 
-	// Re-marshal the modified request
-	modifiedRaw, err := json.Marshal(reqMap)
-	if err != nil {
-		return false, fmt.Errorf("failed to marshal modified request: %w", err)
-	}
+		// Parse the raw JSON to manipulate it
+		var reqMap map[string]interface{}
+		if err := json.Unmarshal(request.Raw, &reqMap); err != nil {
+			return false, fmt.Errorf("failed to parse request JSON: %w", err)
+		}
 
-	request.Raw = modifiedRaw
-	return true, nil
+		// If tool_choice is "required", relax to "auto"
+		changed := false
+		if tc, ok := reqMap["tool_choice"]; ok {
+			if tcStr, ok := tc.(string); ok && tcStr == "required" {
+				reqMap["tool_choice"] = "auto"
+				changed = true
+			}
+		}
+		if !changed {
+			return false, nil
+		}
+
+		// Re-marshal the modified request
+		modifiedRaw, err := json.Marshal(reqMap)
+		if err != nil {
+			return false, fmt.Errorf("failed to marshal modified request: %w", err)
+		}
+
+		request.Raw = modifiedRaw
+		return true, nil
+	}
 }
 
 // adaptStrictJSONSchema injects additionalProperties:false into every object of

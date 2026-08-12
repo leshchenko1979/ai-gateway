@@ -44,6 +44,12 @@ type RouteStep struct {
 	Provider    string `yaml:"provider"`
 	Model       string `yaml:"model"`
 	StepTimeout string `yaml:"step_timeout,omitempty"`
+	// Thinking marks a step whose model uses thinking/reasoning mode. The
+	// tool-choice adapter then relaxes any forced tool_choice unconditionally
+	// (thinking models reject forced choice in any form). Config-driven so new
+	// thinking models need zero code changes — the hardcoded isThinkingModel
+	// list remains as a backward-compatible fallback when the flag is absent.
+	Thinking bool `yaml:"thinking,omitempty"`
 }
 
 // GetStepTimeout returns the timeout as a time.Duration for a route step.
