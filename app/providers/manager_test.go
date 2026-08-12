@@ -1082,6 +1082,56 @@ func TestManager_Rotation_MarshalErrorDoesNotMarkStep(t *testing.T) {
 	}
 }
 
+func TestManager_Rotation_ConcurrentSuccessDoesNotClearNewerMark(t *testing.T) {
+	providers := []config.Provider{{Name: "p1", APIKey: "k", BaseURL: "http://127.0.0.1:1"}}
+	routes := []config.Route{
+		{Name: "race-route", Steps: []config.RouteStep{{Provider: "p1", Model: "gpt-4"}}},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+	key := cooldownKey("race-route", routes[0].Steps[0])
+
+	requestStart := time.Now().Add(-time.Second)
+
+	manager.markStepFailed(routes[0], routes[0].Steps[0])
+	if !manager.stepInCooldown(key) {
+		t.Fatal("precondition: step must be in cooldown after markStepFailed")
+	}
+
+	manager.clearStepFailure("race-route", routes[0].Steps[0], requestStart)
+
+	if !manager.stepInCooldown(key) {
+		t.Fatal("concurrent success that started BEFORE the failure must not clear the newer cooldown mark")
+	}
+}
+
+func TestManager_Rotation_SuccessAfterMarkClearsIt(t *testing.T) {
+	providers := []config.Provider{{Name: "p1", APIKey: "k", BaseURL: "http://127.0.0.1:1"}}
+	routes := []config.Route{
+		{Name: "race-clear", Steps: []config.RouteStep{{Provider: "p1", Model: "gpt-4"}}},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+	key := cooldownKey("race-clear", routes[0].Steps[0])
+
+	manager.markStepFailed(routes[0], routes[0].Steps[0])
+	if !manager.stepInCooldown(key) {
+		t.Fatal("precondition: step must be in cooldown after markStepFailed")
+	}
+
+	manager.clearStepFailure("race-clear", routes[0].Steps[0], time.Now())
+
+	if manager.stepInCooldown(key) {
+		t.Fatal("success that started after the mark must clear the cooldown")
+	}
+}
+
 func TestManager_Rotation_AdapterErrorFailsImmediatelyNotMarked(t *testing.T) {
 	var goodCalls int
 	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
