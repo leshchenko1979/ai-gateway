@@ -417,6 +417,43 @@ func TestClient_StrictSchemaAdapter_AppliesForStrictProviders(t *testing.T) {
 	}
 }
 
+func TestClient_StrictSchemaAdapter_ForcesFalseOverExplicitTrue(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	cfg := config.Provider{Name: "groq", APIKey: "k", BaseURL: server.URL, StrictJSONSchema: true}
+	step := config.RouteStep{Provider: "groq", Model: "gpt-4"}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "test-route")
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"spam","schema":{"type":"object","additionalProperties":true,"properties":{"a":{"type":"string"},"b":{"type":"object","additionalProperties":true,"properties":{"c":{"type":"boolean"}}}},"required":["a"]}}}}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	rf := received["response_format"].(map[string]interface{})
+	js := rf["json_schema"].(map[string]interface{})
+	schema := js["schema"].(map[string]interface{})
+	if ap, ok := schema["additionalProperties"]; !ok || ap != false {
+		t.Fatalf("explicit additionalProperties:true on root must be coerced to false, got %v", schema["additionalProperties"])
+	}
+	props := schema["properties"].(map[string]interface{})
+	nested := props["b"].(map[string]interface{})
+	if ap, ok := nested["additionalProperties"]; !ok || ap != false {
+		t.Fatalf("explicit additionalProperties:true on nested object b must be coerced to false, got %v", nested["additionalProperties"])
+	}
+}
+
 func TestClient_StrictSchemaAdapter_DoesNotApplyForNonStrictProviders(t *testing.T) {
 	var received map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

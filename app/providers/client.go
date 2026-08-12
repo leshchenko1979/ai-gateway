@@ -306,7 +306,7 @@ func enforceStrictSchema(schema map[string]interface{}) bool {
 		return changed
 	}
 	if typ, _ := schema["type"].(string); typ == "object" {
-		if _, exists := schema["additionalProperties"]; !exists {
+		if ap, exists := schema["additionalProperties"]; !exists || ap != false {
 			schema["additionalProperties"] = false
 			changed = true
 		}
