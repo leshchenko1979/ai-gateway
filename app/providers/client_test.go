@@ -1,12 +1,16 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,7 +82,7 @@ func TestClient_Call(t *testing.T) {
 		StepTimeout: "30s",
 	}
 	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, "30s", logger)
+	client := NewClientWithRouteStep(cfg, step, "30s", logger, "test-route")
 
 	// Test call - create request from JSON
 	requestJSON := `{"model":"original-model","messages":[{"role":"user","content":"Hello"}]}`
@@ -206,7 +210,7 @@ func TestClient_Call_ReplacesOnlyModel(t *testing.T) {
 		StepTimeout: "30s",
 	}
 	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, "30s", logger)
+	client := NewClientWithRouteStep(cfg, step, "30s", logger, "test-route")
 
 	// Create request with many fields
 	requestJSON := `{
@@ -337,7 +341,7 @@ func TestClient_ConflictResolution_Tools(t *testing.T) {
 		StepTimeout: "30s",
 	}
 	logger := logger.NewLogger()
-	client := NewClientWithRouteStep(cfg, step, "30s", logger)
+	client := NewClientWithRouteStep(cfg, step, "30s", logger, "test-route")
 
 	// Create request with both tools and response_format
 	requestJSON := `{"model":"original","messages":[{"role":"user","content":"Hello"}],"tools":[{"function":{"name":"test"}}],"response_format":{"type":"json_object"}}`
@@ -363,7 +367,7 @@ func TestNewClientWithRouteStep_UsesFallbackWhenStepTimeoutEmpty(t *testing.T) {
 		Model:    "gpt-4",
 	}
 
-	client := NewClientWithRouteStep(cfg, step, "2m", logger.NewLogger())
+	client := NewClientWithRouteStep(cfg, step, "2m", logger.NewLogger(), "test-route")
 	if client.client.Timeout != 2*time.Minute {
 		t.Fatalf("client timeout = %v, want %v", client.client.Timeout, 2*time.Minute)
 	}
@@ -388,7 +392,7 @@ func TestClient_StrictSchemaAdapter_AppliesForStrictProviders(t *testing.T) {
 	// Provider with StrictJSONSchema=true (e.g. groq).
 	cfg := config.Provider{Name: "groq", APIKey: "k", BaseURL: server.URL, StrictJSONSchema: true}
 	step := config.RouteStep{Provider: "groq", Model: "gpt-4"}
-	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger())
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "test-route")
 
 	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"spam","schema":{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"object","properties":{"c":{"type":"boolean"}}}},"required":["a"]}}}}`
 	var request types.ChatRequest
@@ -426,7 +430,7 @@ func TestClient_StrictSchemaAdapter_DoesNotApplyForNonStrictProviders(t *testing
 	// Provider WITHOUT StrictJSONSchema (e.g. opencode) — request must pass through unchanged.
 	cfg := config.Provider{Name: "opencode", APIKey: "k", BaseURL: server.URL}
 	step := config.RouteStep{Provider: "opencode", Model: "deepseek-v4-flash"}
-	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger())
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "test-route")
 
 	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"spam","schema":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}}}}`
 	var request types.ChatRequest
@@ -450,7 +454,7 @@ func TestClient_StrictSchemaAdapter_NoSchemaLeavesRequestUntouched(t *testing.T)
 	// Request without response_format.json_schema must pass through unchanged.
 	cfg := config.Provider{Name: "groq", APIKey: "k", BaseURL: "https://example.com", StrictJSONSchema: true}
 	step := config.RouteStep{Provider: "groq", Model: "gpt-4"}
-	_ = NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger())
+	_ = NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "test-route")
 
 	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}]}`
 	var request types.ChatRequest
@@ -458,10 +462,420 @@ func TestClient_StrictSchemaAdapter_NoSchemaLeavesRequestUntouched(t *testing.T)
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if err := adaptStrictJSONSchema(&request); err != nil {
+	changed, err := adaptStrictJSONSchema(&request)
+	if err != nil {
 		t.Fatalf("adaptStrictJSONSchema() error = %v", err)
+	}
+	if changed {
+		t.Fatalf("expected changed=false for request without json_schema, got true")
 	}
 	if string(request.Raw) != requestJSON {
 		t.Fatalf("request was modified without json_schema: %s", string(request.Raw))
+	}
+}
+
+// --- Adapter-fire logging tests ---
+
+func TestClient_AdapterFireLogging_MutationLogged(t *testing.T) {
+	// Echo server so Call() completes; we assert on captured log output.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	// Capture log output.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// Strict provider + json_schema request → adaptStrictJSONSchema must fire.
+	cfg := config.Provider{Name: "groq", APIKey: "k", BaseURL: server.URL, StrictJSONSchema: true}
+	step := config.RouteStep{Provider: "groq", Model: "gpt-4"}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "logging-route")
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"spam","schema":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}}}}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Request adapter applied") {
+		t.Fatalf("expected adapter-fire log, got:\n%s", out)
+	}
+	for _, want := range []string{
+		`"adapter":"strict-json-schema"`,
+		`"provider":"groq"`,
+		`"model":"gpt-4"`,
+		`"route":"logging-route"`,
+		`"bytes_before"`,
+		`"bytes_after"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected log to contain %s, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestClient_AdapterFireLogging_NoopIsSilent(t *testing.T) {
+	// Echo server so Call() completes; we assert on captured log output.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// Non-strict provider, request without tools/response_format → no adapter fires.
+	cfg := config.Provider{Name: "opencode", APIKey: "k", BaseURL: server.URL}
+	step := config.RouteStep{Provider: "opencode", Model: "gpt-4"}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "noop-route")
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}]}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "Request adapter applied") {
+		t.Fatalf("expected NO adapter-fire log for no-op, got:\n%s", out)
+	}
+}
+
+// --- Adapter changed-flag tests ---
+
+func TestClient_AdaptToolChoice_ChangedFlag(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       string
+		requestJSON string
+		wantChanged bool
+		wantRaw     string // expected tool_choice value in Raw after call ("" = unchanged)
+	}{
+		{
+			name:        "thinking model + required → relaxed to auto",
+			model:       "deepseek-v4-flash",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "non-thinking model + required → untouched",
+			model:       "gpt-4",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: false,
+			wantRaw:     "required",
+		},
+		{
+			name:        "thinking model + auto → untouched",
+			model:       "deepseek-v4-flash",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"auto"}`,
+			wantChanged: false,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "thinking model + no tool_choice → untouched",
+			model:       "deepseek-v4-flash",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}]}`,
+			wantChanged: false,
+			wantRaw:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var request types.ChatRequest
+			if err := json.Unmarshal([]byte(tt.requestJSON), &request); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			// Set model the way Call() does.
+			request.Model = tt.model
+
+			changed, err := adaptToolChoiceFor(false)(&request)
+			if err != nil {
+				t.Fatalf("adaptToolChoice() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(request.Raw, &parsed); err != nil {
+				t.Fatalf("unmarshal raw: %v", err)
+			}
+			got, _ := parsed["tool_choice"].(string)
+			if got != tt.wantRaw {
+				t.Fatalf("tool_choice = %q, want %q", got, tt.wantRaw)
+			}
+		})
+	}
+}
+
+func TestClient_AdaptConflictResolution_MutationDetection(t *testing.T) {
+	tests := []struct {
+		name            string
+		requestJSON     string
+		wantChanged     bool
+		wantByteIdent   bool // expect Raw byte-identical after call
+		wantRespFmtGone bool // expect response_format removed
+	}{
+		{
+			name:            "tools + response_format → removed, changed=true",
+			requestJSON:     `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tools":[{"function":{"name":"t"}}],"response_format":{"type":"json_object"}}`,
+			wantChanged:     true,
+			wantByteIdent:   false,
+			wantRespFmtGone: true,
+		},
+		{
+			name:          "tools only → untouched, byte-identical",
+			requestJSON:   `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tools":[{"function":{"name":"t"}}]}`,
+			wantChanged:   false,
+			wantByteIdent: true,
+		},
+		{
+			name:          "no tools → untouched, byte-identical",
+			requestJSON:   `{"model":"x","messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_object"}}`,
+			wantChanged:   false,
+			wantByteIdent: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var request types.ChatRequest
+			if err := json.Unmarshal([]byte(tt.requestJSON), &request); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			before := string(request.Raw)
+
+			changed, err := adaptConflictResolution(&request)
+			if err != nil {
+				t.Fatalf("adaptConflictResolution() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+
+			if tt.wantByteIdent && string(request.Raw) != before {
+				t.Fatalf("expected Raw byte-identical, got:\nbefore: %s\nafter:  %s", before, string(request.Raw))
+			}
+
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(request.Raw, &parsed); err != nil {
+				t.Fatalf("unmarshal raw: %v", err)
+			}
+			_, hasRespFmt := parsed["response_format"]
+			if tt.wantRespFmtGone && hasRespFmt {
+				t.Fatalf("expected response_format removed, still present: %s", string(request.Raw))
+			}
+			if !tt.wantRespFmtGone && tt.wantChanged && !hasRespFmt {
+				t.Fatalf("expected response_format preserved: %s", string(request.Raw))
+			}
+		})
+	}
+}
+
+// --- Config-driven thinking flag tests ---
+
+func TestClient_AdaptToolChoiceFor_ThinkingFlag(t *testing.T) {
+	tests := []struct {
+		name        string
+		thinking    bool
+		model       string // NOT in the hardcoded isThinkingModel list unless noted
+		requestJSON string
+		wantChanged bool
+		wantRaw     string
+	}{
+		{
+			name:        "thinking:true + model not in hardcoded list → relaxed",
+			thinking:    true,
+			model:       "gpt-oss-120b", // new thinking model, not in isThinkingModel
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "thinking:false + model not in hardcoded list → untouched",
+			thinking:    false,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: false,
+			wantRaw:     "required",
+		},
+		{
+			name:        "thinking:false + listed model → still relaxed (fallback)",
+			thinking:    false,
+			model:       "deepseek-v4-flash", // in isThinkingModel
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "thinking:true + no tool_choice → untouched",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}]}`,
+			wantChanged: false,
+			wantRaw:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var request types.ChatRequest
+			if err := json.Unmarshal([]byte(tt.requestJSON), &request); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			request.Model = tt.model
+
+			changed, err := adaptToolChoiceFor(tt.thinking)(&request)
+			if err != nil {
+				t.Fatalf("adaptToolChoiceFor() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(request.Raw, &parsed); err != nil {
+				t.Fatalf("unmarshal raw: %v", err)
+			}
+			got, _ := parsed["tool_choice"].(string)
+			if got != tt.wantRaw {
+				t.Fatalf("tool_choice = %q, want %q", got, tt.wantRaw)
+			}
+		})
+	}
+}
+
+func TestNewClientWithRouteStep_ThinkingFlagPlumbsToAdapters(t *testing.T) {
+	// thinking:true on the step must reach adapter selection — the tool-choice
+	// adapter for a non-listed model must relax tool_choice.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var received map[string]interface{}
+		_ = json.Unmarshal(body, &received)
+		if tc, _ := received["tool_choice"].(string); tc != "auto" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("tool_choice not relaxed"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	cfg := config.Provider{Name: "p", APIKey: "k", BaseURL: server.URL}
+	step := config.RouteStep{Provider: "p", Model: "gpt-oss-120b", Thinking: true}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "thinking-route")
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+}
+
+// --- adaptToolChoice object-form support tests ---
+
+func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
+	tests := []struct {
+		name        string
+		thinking    bool
+		model       string
+		requestJSON string
+		wantChanged bool
+		wantRaw     string
+	}{
+		{
+			name:        "string required → auto",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "object form function → auto",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":{"type":"function","function":{"name":"final_result"}}}`,
+			wantChanged: true,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "none untouched",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"none"}`,
+			wantChanged: false,
+			wantRaw:     "none",
+		},
+		{
+			name:        "auto untouched",
+			thinking:    true,
+			model:       "gpt-oss-120b",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"auto"}`,
+			wantChanged: false,
+			wantRaw:     "auto",
+		},
+		{
+			name:        "non-thinking object form untouched",
+			thinking:    false,
+			model:       "gpt-4", // not in hardcoded list, no flag
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":{"type":"function","function":{"name":"final_result"}}}`,
+			wantChanged: false,
+			wantRaw:     "function", // stays object form
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var request types.ChatRequest
+			if err := json.Unmarshal([]byte(tt.requestJSON), &request); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			request.Model = tt.model
+
+			changed, err := adaptToolChoiceFor(tt.thinking)(&request)
+			if err != nil {
+				t.Fatalf("adaptToolChoiceFor() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(request.Raw, &parsed); err != nil {
+				t.Fatalf("unmarshal raw: %v", err)
+			}
+			if tt.wantRaw == "function" {
+				// object form preserved — verify it's still a map with type function
+				if tc, ok := parsed["tool_choice"].(map[string]interface{}); !ok {
+					t.Fatalf("expected object-form tool_choice preserved, got %v", parsed["tool_choice"])
+				} else if tc["type"] != "function" {
+					t.Fatalf("expected type=function preserved, got %v", tc["type"])
+				}
+				return
+			}
+			got, _ := parsed["tool_choice"].(string)
+			if got != tt.wantRaw {
+				t.Fatalf("tool_choice = %q, want %q", got, tt.wantRaw)
+			}
+		})
 	}
 }
