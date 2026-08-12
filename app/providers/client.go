@@ -19,14 +19,14 @@ type RequestAdapter func(request *types.ChatRequest) error
 
 // Client implements the Provider interface for OpenAI-compatible APIs
 type Client struct {
-	name      string
-	apiKey    string
-	baseURL   string
-	model     string
-	timeout   time.Duration
-	adapters  []RequestAdapter
-	logger    *logger.Logger
-	client    *http.Client
+	name     string
+	apiKey   string
+	baseURL  string
+	model    string
+	timeout  time.Duration
+	adapters []RequestAdapter
+	logger   *logger.Logger
+	client   *http.Client
 }
 
 // NewClient creates a new OpenAI-compatible provider client
@@ -57,7 +57,7 @@ func NewClientWithRouteStep(providerCfg config.Provider, step config.RouteStep, 
 		baseURL:  providerCfg.BaseURL,
 		model:    step.Model,
 		timeout:  timeout,
-		adapters: defaultAdapters(),
+		adapters: adaptersForProvider(providerCfg),
 		logger:   logger,
 		client: &http.Client{
 			Timeout: timeout,
@@ -137,6 +137,79 @@ func defaultAdapters() []RequestAdapter {
 	return []RequestAdapter{
 		adaptConflictResolution,
 		adaptToolChoice,
+	}
+}
+
+// adaptersForProvider returns the adapter pipeline for a provider.
+// Providers with StrictJSONSchema=true get the strict-schema adapter injected
+// (groq/cerebras require additionalProperties:false; opencode rejects it, so
+// it must NOT be global).
+func adaptersForProvider(cfg config.Provider) []RequestAdapter {
+	adapters := defaultAdapters()
+	if cfg.StrictJSONSchema {
+		adapters = append(adapters, adaptStrictJSONSchema)
+	}
+	return adapters
+}
+
+// adaptStrictJSONSchema injects additionalProperties:false into every object of
+// response_format.json_schema so providers with strict schema validation
+// (groq, cerebras) accept the request. Leaves the request untouched when no
+// json_schema response_format is present.
+func adaptStrictJSONSchema(request *types.ChatRequest) error {
+	var reqMap map[string]interface{}
+	if err := json.Unmarshal(request.Raw, &reqMap); err != nil {
+		return fmt.Errorf("failed to parse request JSON: %w", err)
+	}
+
+	rf, ok := reqMap["response_format"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	js, ok := rf["json_schema"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	schema, ok := js["schema"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	enforceStrictSchema(schema)
+
+	modifiedRaw, err := json.Marshal(reqMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal modified request: %w", err)
+	}
+	request.Raw = modifiedRaw
+	return nil
+}
+
+// enforceStrictSchema recursively adds additionalProperties:false to every
+// object node in a JSON schema.
+func enforceStrictSchema(schema map[string]interface{}) {
+	if schema == nil {
+		return
+	}
+	if typ, _ := schema["type"].(string); typ == "object" {
+		schema["additionalProperties"] = false
+	}
+	if props, ok := schema["properties"].(map[string]interface{}); ok {
+		for _, propSchema := range props {
+			if child, ok := propSchema.(map[string]interface{}); ok {
+				enforceStrictSchema(child)
+			}
+		}
+	}
+	// also handle oneOf/anyOf/allOf for completeness
+	for _, key := range []string{"oneOf", "anyOf", "allOf"} {
+		if list, ok := schema[key].([]interface{}); ok {
+			for _, item := range list {
+				if child, ok := item.(map[string]interface{}); ok {
+					enforceStrictSchema(child)
+				}
+			}
+		}
 	}
 }
 
