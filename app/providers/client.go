@@ -36,6 +36,13 @@ type namedAdapter struct {
 // so they must never trigger endpoint rotation.
 var ErrRequestAdapter = errors.New("request adapter failed")
 
+// ErrClientSide marks failures that originate INSIDE the gateway before any
+// network I/O reaches the provider (request marshal, HTTP request creation).
+// These are gateway-side faults, not provider health signals — rotating a
+// healthy endpoint for them is futile and would mask the real cause. The
+// manager's isRotatableError excludes them, exactly like ErrRequestAdapter.
+var ErrClientSide = errors.New("client-side request error")
+
 // HTTPStatusError reports a non-200 response from a provider. The manager uses
 // the StatusCode to classify rotation: 4xx (except 429) are request-shape
 // faults (permanent or client-fixable — rotation is futile), while 429/5xx and
@@ -135,14 +142,14 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 	// Prepare request body
 	reqBody, err := json.Marshal(request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("%w: failed to marshal request: %v", ErrClientSide, err)
 	}
 
 	// Create HTTP request
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("%w: failed to create request: %v", ErrClientSide, err)
 	}
 
 	// Set headers
@@ -180,36 +187,40 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 func defaultAdapters() []namedAdapter {
 	return []namedAdapter{
 		{name: "conflict-resolution", fn: adaptConflictResolution},
-		{name: "tool-choice", fn: adaptToolChoiceFor(false)},
+		{name: "tool-choice", fn: adaptToolChoiceFor(nil)},
 	}
 }
 
 // adaptersForProvider returns the adapter pipeline for a provider.
 // Providers with StrictJSONSchema=true get the strict-schema adapter injected
 // (groq/cerebras require additionalProperties:false; opencode rejects it, so
-// it must NOT be global). thinking marks the step's model as using thinking
-// mode → the tool-choice adapter relaxes forced tool_choice unconditionally.
-func adaptersForProvider(cfg config.Provider, thinking bool) []namedAdapter {
+// it must NOT be global). thinking is the step's tri-state Thinking pointer:
+// nil → fallback to hardcoded list, true → unconditional relax, false →
+// explicit opt-out (never relax, even for listed models).
+func adaptersForProvider(cfg config.Provider, thinking *bool) []namedAdapter {
 	adapters := defaultAdapters()
 	if cfg.StrictJSONSchema {
 		adapters = append(adapters, namedAdapter{name: "strict-json-schema", fn: adaptStrictJSONSchema})
 	}
-	if thinking {
-		// Replace the fallback-gated tool-choice adapter with the
-		// unconditional one.
+	if thinking != nil {
+		// Explicit flag present: replace the fallback-gated tool-choice
+		// adapter with the explicit one (true=relax, false=opt-out).
 		for i := range adapters {
 			if adapters[i].name == "tool-choice" {
-				adapters[i].fn = adaptToolChoiceFor(true)
+				adapters[i].fn = adaptToolChoiceFor(thinking)
 			}
 		}
 	}
 	return adapters
 }
 
-// adaptToolChoiceFor returns the tool-choice adapter for a step. With
-// thinking=true it relaxes forced tool_choice unconditionally (the model uses
-// thinking mode, whatever its name). With thinking=false it falls back to the
-// hardcoded isThinkingModel list — backward compatible.
+// adaptToolChoiceFor returns the tool-choice adapter for a step. thinking is a
+// TRI-STATE pointer (RouteStep.Thinking):
+//   - nil  → backward-compatible fallback to the hardcoded isThinkingModel
+//     name list (flag absent in config)
+//   - true → relax forced tool_choice unconditionally (this model is thinking)
+//   - false→ EXPLICIT opt-out: never relax, even if the model name is in the
+//     hardcoded list — the operator is saying this model is NOT thinking.
 //
 // Both tool_choice shapes are handled for thinking models:
 //   - string "required" → "auto"
@@ -218,9 +229,18 @@ func adaptersForProvider(cfg config.Provider, thinking bool) []namedAdapter {
 // Thinking models reject forced choice in any form, so an explicit function
 // name is overridden (consistent with the string behavior, and documented in
 // .cursor/memory/decisions.md). Anything else ("none", "auto") is untouched.
-func adaptToolChoiceFor(thinking bool) RequestAdapter {
+func adaptToolChoiceFor(thinking *bool) RequestAdapter {
 	return func(request *types.ChatRequest) (bool, error) {
-		if !thinking && !isThinkingModel(request.Model) {
+		isThinking := false
+		if thinking != nil {
+			isThinking = *thinking
+			if !isThinking {
+				// Explicit opt-out — the hardcoded fallback list must NOT
+				// apply. Return untouched even for listed models.
+				return false, nil
+			}
+		} else if !isThinkingModel(request.Model) {
+			// Flag absent: fall back to the hardcoded list.
 			return false, nil
 		}
 
@@ -306,7 +326,7 @@ func enforceStrictSchema(schema map[string]interface{}) bool {
 		return changed
 	}
 	if typ, _ := schema["type"].(string); typ == "object" {
-		if _, exists := schema["additionalProperties"]; !exists {
+		if ap, exists := schema["additionalProperties"]; !exists || ap != false {
 			schema["additionalProperties"] = false
 			changed = true
 		}

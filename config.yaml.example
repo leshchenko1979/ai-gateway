@@ -23,7 +23,7 @@ routes:
     steps:
       - provider: cerebras
         model: gpt-oss-120b
-        thinking: true # thinking models can't honor forced tool_choice → the tool-choice adapter relaxes it unconditionally (no code change needed for new thinking models)
+        thinking: true # tri-state: true=thinking (relax forced tool_choice unconditionally), false=explicit opt-out (never relax, even if the model name is in the hardcoded list), unset=fall back to the hardcoded isThinkingModel list
       - provider: openrouter
         model: nvidia/nemotron-3-nano-30b-a3b:free
 

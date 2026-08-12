@@ -32,8 +32,19 @@ type Manager struct {
 	// stepCooldowns tracks provider:model failures for endpoint rotation.
 	// A step that failed recently is skipped on subsequent requests until the
 	// cooldown expires, so a flaky endpoint stops burning the route budget.
+	// The value records the expiry AND when the failure was marked, so
+	// clearStepFailure can fence against the concurrent-success race.
 	mu            sync.Mutex
-	stepCooldowns map[string]time.Time // "route/provider/model" -> cooldown until
+	stepCooldowns map[string]stepCooldown // "route/provider/model" -> cooldown
+}
+
+// stepCooldown records a rotation mark: when the step may be tried again
+// (until) and when the failure was recorded (markedAt). markedAt enables
+// timestamp-fenced clearing — a success only clears a mark that predates the
+// successful request's start.
+type stepCooldown struct {
+	until    time.Time
+	markedAt time.Time
 }
 
 // NewManager creates a new provider manager.
@@ -61,7 +72,7 @@ func NewManager(cfg *config.Config, logger *logger.Logger) (*Manager, error) {
 		config:        cfg,
 		logger:        logger,
 		tracer:        telemetry.Tracer("ai-gateway.providers"),
-		stepCooldowns: make(map[string]time.Time),
+		stepCooldowns: make(map[string]stepCooldown),
 	}, nil
 }
 
@@ -74,18 +85,21 @@ func cooldownKey(routeName string, step config.RouteStep) string {
 func (m *Manager) stepInCooldown(key string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	until, ok := m.stepCooldowns[key]
-	return ok && time.Now().Before(until)
+	cd, ok := m.stepCooldowns[key]
+	return ok && time.Now().Before(cd.until)
 }
 
-// markStepFailed records a step failure and sets its cooldown expiry.
-func (m *Manager) markStepFailed(route config.Route, step config.RouteStep) {
+// markStepFailed records a step failure and sets its cooldown expiry. The ctx
+// is the step/route context so the rotation log attaches to the active trace
+// span (decisions.md: log events must reach the exporter as span events).
+func (m *Manager) markStepFailed(ctx context.Context, route config.Route, step config.RouteStep) {
 	cooldown := m.config.GetStepCooldown(route)
 	key := cooldownKey(route.Name, step)
+	now := time.Now()
 	m.mu.Lock()
-	m.stepCooldowns[key] = time.Now().Add(cooldown)
+	m.stepCooldowns[key] = stepCooldown{until: now.Add(cooldown), markedAt: now}
 	m.mu.Unlock()
-	m.logger.Info(context.Background(), "Step marked for rotation (will be skipped)",
+	m.logger.Info(ctx, "Step marked for rotation (will be skipped)",
 		map[string]interface{}{
 			"route":       route.Name,
 			"provider":    step.Provider,
@@ -95,11 +109,18 @@ func (m *Manager) markStepFailed(route config.Route, step config.RouteStep) {
 		})
 }
 
-// clearStepFailure removes a step's cooldown mark after a successful call.
-func (m *Manager) clearStepFailure(routeName string, step config.RouteStep) {
+// clearStepFailure removes a step's cooldown mark after a successful call —
+// but only if the mark predates the successful request's start. A mark set by
+// a concurrent in-flight failure (after this request began) is NEWER evidence
+// than this success; clearing it would let a just-failed endpoint back into
+// rotation immediately. requestStart fences exactly that.
+func (m *Manager) clearStepFailure(routeName string, step config.RouteStep, requestStart time.Time) {
 	key := cooldownKey(routeName, step)
 	m.mu.Lock()
-	delete(m.stepCooldowns, key)
+	cd, ok := m.stepCooldowns[key]
+	if ok && cd.markedAt.Before(requestStart) {
+		delete(m.stepCooldowns, key)
+	}
 	m.mu.Unlock()
 }
 
@@ -277,7 +298,11 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			// permanent or client-fixable, rotation is futile and would mask
 			// the real cause), never adapter bugs (provider-independent).
 			if isRotatableError(err) {
-				m.markStepFailed(*route, step)
+				// routeCtx, not stepCtx: the step span is already ended at this
+				// point (stepSpan.End() ran above), so its events are dropped.
+				// The route span stays active until the function returns —
+				// the rotation log attaches to it as a span event.
+				m.markStepFailed(routeCtx, *route, step)
 			}
 			continue
 		}
@@ -313,7 +338,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 		})
 
 		// Endpoint rotation: a successful call clears the step's failure mark.
-		m.clearStepFailure(route.Name, step)
+		m.clearStepFailure(route.Name, step, start)
 
 		// Attach routing summary to response
 		response.RoutingSummary = &types.RoutingSummary{
@@ -378,6 +403,9 @@ func isRotatableError(err error) bool {
 	}
 	if errors.Is(err, ErrRequestAdapter) {
 		return false // gateway bug, provider-independent — rotation is meaningless
+	}
+	if errors.Is(err, ErrClientSide) {
+		return false // gateway-side pre-network fault — provider never saw the request
 	}
 	return true // network / timeout / unknown
 }
