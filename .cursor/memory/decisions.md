@@ -303,3 +303,59 @@ Each route step gets span name `step/{model}`; all step logs and `provider.Call`
 
 ### Attributes
 `step.provider`, `step.model`, `step.index`, `route.name` on the step span; duplicate model names distinguished by `step.index`.
+
+## Error classification for rotation (2026-08-12)
+
+### Decision
+`markStepFailed` (endpoint rotation / circuit breaker) is now gated by `isRotatableError(err)` — only real provider *health* faults rotate. `RequestAdapter` signature changed to `func(*types.ChatRequest) (bool, error)` (bool = "did I change Raw") and adapter errors now short-circuit the request immediately.
+
+### Classification rules
+- **4xx ≠ 429 → NO rotation.** A 400/422 is a request-shape / permanent fault: the endpoint is healthy, the request is wrong. Rotation is futile and would mask the real cause (and burn a healthy endpoint for the cooldown).
+- **429 → rotation.** Rate-limit is a capacity signal, not a permanent fault — the cooldown gives the endpoint room to recover.
+- **5xx / network / timeout → rotation.** Genuine health faults.
+- **Adapter errors (`ErrRequestAdapter`) → fail the request immediately, NEVER rotate.** The same Raw fails identically on every provider, so trying the rest of the route is wasted latency; and rotation is meaningless for a gateway-side bug. `isRouteCanceled` / `isRouteDeadlineExceeded` guards still run first (client cancel/timeout ≠ step failure).
+
+### Rationale
+- Found during the groq/opencode investigation: an unshapable request (e.g. `max_tokens` capped low on groq) previously marked a *healthy* endpoint for rotation as if it were down, and an adapter bug would have rotated every endpoint.
+- Classification lives in the manager (next to `markStepFailed`), not in `Call()` — the client stays a dumb HTTP+adapter layer; the manager owns rotation state.
+
+### Implementation details
+- `HTTPStatusError{StatusCode, Body}` typed error from `Client.Call()` on non-200; `errors.As` in the manager extracts the status.
+- `ErrRequestAdapter` sentinel; adapter errors wrapped `%w ErrRequestAdapter: adapter[N] (name) failed: ...`.
+- Error log for failed steps now includes `status_code` when the error is an `HTTPStatusError`.
+- Test seam: `newStepClient` package var (defaults to `NewClientWithRouteStep`) so tests can inject clients with custom adapters.
+
+## Adapter-fire logging + named adapters (2026-08-12)
+
+### Decision
+Adapters now report mutation and are named; every mutation is logged.
+
+- `RequestAdapter func(*types.ChatRequest) (bool, error)` — bool = "did I change Raw". Explicit reporting is required because Go map marshaling is unordered: `bytes.Equal(before, after)` is NOT a reliable mutation detector.
+- `namedAdapter{name, fn}` — the name exists only at list-construction (`defaultAdapters` / `adaptersForProvider`); `RequestAdapter` stays a bare function type so direct-call unit tests keep working.
+- `Client.Call()` logs INFO `"Request adapter applied"` with `adapter`, `provider`, `model`, `route`, `bytes_before`, `bytes_after` only when an adapter reports a change. No-op adapters are silent.
+- `Client` gained a `routeName` field; `NewClientWithRouteStep` gained a `routeName` param (the manager passes `route.Name`). Without it, adapter logs would silently carry `route: ""`.
+
+### Adapter behavior notes
+- `adaptConflictResolution` early-returns `(false, nil)` with Raw byte-identical when no deletion is needed (previously it re-marshaled unconditionally — CPU waste + map key reorder).
+- `adaptStrictJSONSchema` returns `(true, nil)` only if it actually injected `additionalProperties:false` anywhere (recursive `enforceStrictSchema` now reports changes).
+- `adaptToolChoice` became `adaptToolChoiceFor(thinking bool)` factory (see next decision).
+
+## Config-driven thinking-model flag (2026-08-12)
+
+### Decision
+`RouteStep.Thinking bool` replaces reliance on the hardcoded `isThinkingModel` name list for new thinking models.
+
+- `thinking: true` on a step → the tool-choice adapter relaxes forced `tool_choice` unconditionally, whatever the model name.
+- `thinking` absent → backward-compatible fallback to `isThinkingModel()` (deepseek-v4-flash, deepseek-reasoner, deepseek-r1).
+- Strict `KnownFields` YAML decoding means the field must exist in the struct or configs fail to load — adding the field IS the validation.
+- New thinking models (e.g. `gpt-oss-120b`) need zero code changes: just set `thinking: true` on the step.
+
+## adaptToolChoice object-form support (2026-08-12)
+
+### Decision
+The thinking-model branch of `adaptToolChoiceFor` handles both `tool_choice` shapes:
+
+- string `"required"` → `"auto"` (existing behavior)
+- object `{"type":"function","function":{"name":…}}` → `"auto"` (new)
+
+Thinking models reject forced choice in any form, so an explicit function name is overridden — consistent with the existing string behavior. `"none"` / `"auto"` untouched; non-thinking untouched. pydantic-ai sends the string form today, so the ai-antispam bot is unaffected.

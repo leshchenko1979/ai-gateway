@@ -3,7 +3,7 @@
 ## Core Modules
 
 ### Configuration System (`config/`)
-- **`types.go`**: Data structures for Config, Provider, Route, RouteStep (`default_route_timeout`, `route_timeout`, `step_timeout`)
+- **`types.go`**: Data structures for Config, Provider, Route, RouteStep (`default_route_timeout`, `route_timeout`, `step_timeout`, `thinking`)
 - **`config.go`**: YAML loading with env var substitution and validation
 - **Key Functions**:
   - `LoadConfig()`: Loads and validates configuration
@@ -27,9 +27,13 @@
   - `Manager.GetRoute()`: Exact model name matching
   - `Manager.ExecuteWithTracing()`: Route span + per-step `step/{model}` span; `stepCtx` for logs and `provider.Call`; explicit `stepSpan.End()` per iteration (not `defer` in `for`)
   - `NewManager(cfg, ...)`: Uses config-level timeout policy (`default_route_timeout`, `route_timeout`, `step_timeout`)
-  - `Client.Call()` runs `RequestAdapter` pipeline before each provider call:
-    - `adaptConflictResolution`: removes `response_format` when `tools` is present (always-on)
-    - `adaptToolChoice`: downgrades `tool_choice: "required"` to `"auto"` for thinking models (deepseek v4 flash, deepseek-reasoner)
+  - `Client.Call()` runs `RequestAdapter` pipeline before each provider call. Each adapter is `func(*types.ChatRequest) (bool, error)` (bool = "did I change Raw") wrapped in a `namedAdapter{name, fn}` so mutation logs say WHICH adapter fired:
+    - `adaptConflictResolution`: removes `response_format` when `tools` is present (always-on); early-returns byte-identical Raw when no deletion needed
+    - `adaptToolChoiceFor(thinking)`: downgrades forced `tool_choice` to `"auto"` for thinking models — both string `"required"` and object `{"type":"function",...}` forms; gated by `step.Thinking` flag with hardcoded `isThinkingModel` list as fallback
+    - `adaptStrictJSONSchema`: injects `additionalProperties:false` recursively into `response_format.json_schema` for providers with `strict_json_schema: true` (groq/cerebras); reports changed only if it injected anything
+  - Adapter mutations are logged: INFO `"Request adapter applied"` with `adapter`, `provider`, `model`, `route`, `bytes_before`, `bytes_after` (no-op adapters silent). `Client` carries `routeName` (set from `NewClientWithRouteStep`).
+  - Adapter errors wrap `ErrRequestAdapter` — they fail the request immediately (same Raw fails on every provider) and NEVER trigger endpoint rotation.
+  - Non-200 provider responses return typed `HTTPStatusError{StatusCode, Body}`; the manager classifies rotation via `isRotatableError` (4xx≠429 → no rotation; 429/5xx/network/timeout → rotation; adapter errors → never).
 
 ### Server Layer (`server/`)
 - **`handlers.go`**: HTTP request/response handling
