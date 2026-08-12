@@ -314,6 +314,7 @@ Each route step gets span name `step/{model}`; all step logs and `provider.Call`
 - **429 → rotation.** Rate-limit is a capacity signal, not a permanent fault — the cooldown gives the endpoint room to recover.
 - **5xx / network / timeout → rotation.** Genuine health faults.
 - **Adapter errors (`ErrRequestAdapter`) → fail the request immediately, NEVER rotate.** The same Raw fails identically on every provider, so trying the rest of the route is wasted latency; and rotation is meaningless for a gateway-side bug. `isRouteCanceled` / `isRouteDeadlineExceeded` guards still run first (client cancel/timeout ≠ step failure).
+- **Client-side marshal/create errors (`ErrClientSide`) → NEVER rotate** (added 2026-08-12, review finding). `Client.Call()` wraps pre-network failures (`json.Marshal` failure, `http.NewRequest` failure) with `ErrClientSide` — the provider never saw the request, so rotation would burn a healthy endpoint for a gateway-side fault. `isRotatableError` excludes it via `errors.Is`.
 
 ### Rationale
 - Found during the groq/opencode investigation: an unshapable request (e.g. `max_tokens` capped low on groq) previously marked a *healthy* endpoint for rotation as if it were down, and an adapter bug would have rotated every endpoint.
@@ -343,10 +344,11 @@ Adapters now report mutation and are named; every mutation is logged.
 ## Config-driven thinking-model flag (2026-08-12)
 
 ### Decision
-`RouteStep.Thinking bool` replaces reliance on the hardcoded `isThinkingModel` name list for new thinking models.
+`RouteStep.Thinking *bool` (tri-state) replaces reliance on the hardcoded `isThinkingModel` name list for new thinking models.
 
 - `thinking: true` on a step → the tool-choice adapter relaxes forced `tool_choice` unconditionally, whatever the model name.
-- `thinking` absent → backward-compatible fallback to `isThinkingModel()` (deepseek-v4-flash, deepseek-reasoner, deepseek-r1).
+- `thinking` absent (`nil`) → backward-compatible fallback to `isThinkingModel()` (deepseek-v4-flash, deepseek-reasoner, deepseek-r1).
+- `thinking: false` → **explicit opt-out** (added 2026-08-12, review finding): this model is NOT thinking even if its name is in the hardcoded list — an escape hatch when a listed model stops requiring relaxation (or a model name collision). A plain `bool` cannot express this: with `bool`, `false` is indistinguishable from unset and would still hit the fallback list.
 - Strict `KnownFields` YAML decoding means the field must exist in the struct or configs fail to load — adding the field IS the validation.
 - New thinking models (e.g. `gpt-oss-120b`) need zero code changes: just set `thinking: true` on the step.
 
@@ -359,3 +361,46 @@ The thinking-model branch of `adaptToolChoiceFor` handles both `tool_choice` sha
 - object `{"type":"function","function":{"name":…}}` → `"auto"` (new)
 
 Thinking models reject forced choice in any form, so an explicit function name is overridden — consistent with the existing string behavior. `"none"` / `"auto"` untouched; non-thinking untouched. pydantic-ai sends the string form today, so the ai-antispam bot is unaffected.
+
+## Strict-schema coercion restored (2026-08-12)
+
+### Decision
+`enforceStrictSchema` coerces `additionalProperties` to `false` **unconditionally** — whenever it is absent **or** not exactly `false` — instead of only injecting when absent.
+
+### Context
+A sub-agent review found a regression introduced with the strict-schema adapter: the pre-change code forced `additionalProperties:false` unconditionally, but the new code only injected it when the key was absent. A client sending an explicit `additionalProperties: true` to groq/cerebras would pass through → provider 400 → and with the new 4xx-never-rotates classification, that's a **permanent, visible failure** where the gateway used to auto-correct.
+
+### Rationale
+- groq/cerebras strict mode rejects `additionalProperties: true` in the schema — coercing it is the whole point of the adapter.
+- `changed` is still reported correctly: it returns `true` only when the walker actually modified the schema.
+
+### Implementation
+```go
+if ap, exists := schema["additionalProperties"]; !exists || ap != false {
+    schema["additionalProperties"] = false
+    changed = true
+}
+```
+Also recurses into `properties` and `oneOf`/`anyOf`/`allOf` branches.
+
+## clearStepFailure race fence (2026-08-12)
+
+### Decision
+`clearStepFailure` is fenced against the concurrent-success race: a success only clears a cooldown mark that **predates** the successful request's own start.
+
+### Context
+Race found in review: request B passes the `stepInCooldown` check, is in-flight while request A fails and marks the step, then B succeeds and erases A's mark — the circuit breaker never engages for the next request. The cooldown map now stores `markedAt` alongside the expiry, and the success path passes its request `start` time.
+
+### Implementation
+- `stepCooldown{until, markedAt}` — `markStepFailed` records `now` as `markedAt`.
+- `clearStepFailure(routeName, step, requestStart)` deletes only when `cd.markedAt.Before(requestStart)`.
+- The manager's success path passes the request's `start` (captured at execution begin).
+- Self-healing: the mark survives at most until its natural expiry, so a stale clear only weakens the breaker briefly.
+
+## Rotation log attaches to trace span (2026-08-12)
+
+### Decision
+`markStepFailed` logs with the route context (`routeCtx`), not `context.Background()`, so the rotation log appears as a span event on the active trace.
+
+### Context
+Review finding: with `context.Background()`, `RecordLog` produced no span event (no valid span in ctx) — the rotation decision was invisible in Logfire traces, violating the project's own "Logger context for trace correlation" decision. The route span is the correct parent: the step span is already ended when `markStepFailed` runs (explicit `stepSpan.End()` before `continue`), so events on it would be dropped.
