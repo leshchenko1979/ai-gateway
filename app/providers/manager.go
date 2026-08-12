@@ -379,5 +379,8 @@ func isRotatableError(err error) bool {
 	if errors.Is(err, ErrRequestAdapter) {
 		return false // gateway bug, provider-independent — rotation is meaningless
 	}
+	if errors.Is(err, ErrClientSide) {
+		return false // gateway-side pre-network fault — provider never saw the request
+	}
 	return true // network / timeout / unknown
 }

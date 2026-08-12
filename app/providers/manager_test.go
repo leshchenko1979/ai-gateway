@@ -997,6 +997,91 @@ func TestManager_Rotation_RateLimitMarks(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Reviewer LOW: client-side errors (marshal/create) must never rotate a healthy
+// endpoint. They are gateway-side faults, not provider health signals — the
+// same class of error the rotation classification PR set out to exclude.
+// ---------------------------------------------------------------------------
+
+func TestIsRotatableError_MarshalErrorNotRotatable(t *testing.T) {
+	err := fmt.Errorf("%w: failed to marshal request: %v", ErrClientSide, errors.New("json: unsupported type"))
+	if isRotatableError(err) {
+		t.Fatal("client-side marshal error must NOT be rotatable (gateway bug, provider-independent)")
+	}
+}
+
+func TestIsRotatableError_CreateRequestErrorNotRotatable(t *testing.T) {
+	err := fmt.Errorf("%w: failed to create request: %v", ErrClientSide, errors.New("invalid URL"))
+	if isRotatableError(err) {
+		t.Fatal("client-side create-request error must NOT be rotatable (gateway bug, provider-independent)")
+	}
+}
+
+func TestClient_Call_WrapsMarshalErrorWithClientSideSentinel(t *testing.T) {
+	cfg := config.Provider{Name: "p1", APIKey: "k", BaseURL: "http://[::1]:namedport"}
+	step := config.RouteStep{Provider: "p1", Model: "gpt-4"}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "test-route")
+
+	request := mustRequest(t, "test-route")
+
+	_, err := client.Call(context.Background(), request)
+	if err == nil {
+		t.Fatal("expected create-request error from invalid baseURL")
+	}
+	if !errors.Is(err, ErrClientSide) {
+		t.Fatalf("expected ErrClientSide, got %T: %v", err, err)
+	}
+}
+
+func TestManager_Rotation_MarshalErrorDoesNotMarkStep(t *testing.T) {
+	var goodCalls int
+	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		goodCalls++
+		responseJSON := `{
+			"id": "test-id", "object": "chat.completion", "created": 1234567890, "model": "gpt-4",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(responseJSON))
+	}))
+	t.Cleanup(goodServer.Close)
+
+	providers := []config.Provider{
+		{Name: "bad", APIKey: "k", BaseURL: "http://[::1]:namedport"},
+		{Name: "good", APIKey: "k", BaseURL: goodServer.URL},
+	}
+	routes := []config.Route{
+		{
+			Name: "marshal-route",
+			Steps: []config.RouteStep{
+				{Provider: "bad", Model: "gpt-4"},
+				{Provider: "good", Model: "gpt-4"},
+			},
+		},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+
+	request := mustRequest(t, "marshal-route")
+
+	_, err := manager.Execute(request)
+	if err != nil {
+		t.Fatalf("expected fallback to succeed: %v", err)
+	}
+	if goodCalls != 1 {
+		t.Fatalf("fallback provider called %d times, want 1", goodCalls)
+	}
+
+	key := cooldownKey("marshal-route", routes[0].Steps[0])
+	if manager.stepInCooldown(key) {
+		t.Fatal("client-side error must NOT mark the step for rotation (gateway bug, provider-independent)")
+	}
+}
+
 func TestManager_Rotation_AdapterErrorFailsImmediatelyNotMarked(t *testing.T) {
 	var goodCalls int
 	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

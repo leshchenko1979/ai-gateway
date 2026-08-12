@@ -36,6 +36,13 @@ type namedAdapter struct {
 // so they must never trigger endpoint rotation.
 var ErrRequestAdapter = errors.New("request adapter failed")
 
+// ErrClientSide marks failures that originate INSIDE the gateway before any
+// network I/O reaches the provider (request marshal, HTTP request creation).
+// These are gateway-side faults, not provider health signals — rotating a
+// healthy endpoint for them is futile and would mask the real cause. The
+// manager's isRotatableError excludes them, exactly like ErrRequestAdapter.
+var ErrClientSide = errors.New("client-side request error")
+
 // HTTPStatusError reports a non-200 response from a provider. The manager uses
 // the StatusCode to classify rotation: 4xx (except 429) are request-shape
 // faults (permanent or client-fixable — rotation is futile), while 429/5xx and
@@ -135,14 +142,14 @@ func (c *Client) Call(ctx context.Context, request types.ChatRequest) (*types.Ch
 	// Prepare request body
 	reqBody, err := json.Marshal(request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("%w: failed to marshal request: %v", ErrClientSide, err)
 	}
 
 	// Create HTTP request
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("%w: failed to create request: %v", ErrClientSide, err)
 	}
 
 	// Set headers
