@@ -679,6 +679,11 @@ func mustRequest(t *testing.T, routeName string) types.ChatRequest {
 	return request
 }
 
+// boolPtr returns a pointer to v — tri-state test helper for RouteStep.Thinking.
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func TestManager_Rotation_FailedStepSkippedOnNextCall(t *testing.T) {
 	badServer := failingServer(t)
 	goodServer := successServer(t)

@@ -44,12 +44,18 @@ type RouteStep struct {
 	Provider    string `yaml:"provider"`
 	Model       string `yaml:"model"`
 	StepTimeout string `yaml:"step_timeout,omitempty"`
-	// Thinking marks a step whose model uses thinking/reasoning mode. The
-	// tool-choice adapter then relaxes any forced tool_choice unconditionally
-	// (thinking models reject forced choice in any form). Config-driven so new
-	// thinking models need zero code changes — the hardcoded isThinkingModel
-	// list remains as a backward-compatible fallback when the flag is absent.
-	Thinking bool `yaml:"thinking,omitempty"`
+	// Thinking is a TRI-STATE mark for a step whose model uses thinking/
+	// reasoning mode. The tool-choice adapter then relaxes any forced
+	// tool_choice unconditionally (thinking models reject forced choice in any
+	// form). Config-driven so new thinking models need zero code changes:
+	//   - nil (unset)  → backward-compatible fallback to the hardcoded
+	//     isThinkingModel name list
+	//   - true         → this model is thinking; relax unconditionally
+	//   - false        → EXPLICIT opt-out: this model is NOT thinking, even if
+	//     its name is in the hardcoded list (escape hatch)
+	// *bool (not bool) because a plain bool cannot distinguish "unset" from
+	// "false" — with bool, thinking:false would still hit the fallback list.
+	Thinking *bool `yaml:"thinking,omitempty"`
 }
 
 // GetStepTimeout returns the timeout as a time.Duration for a route step.

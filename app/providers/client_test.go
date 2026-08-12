@@ -641,7 +641,7 @@ func TestClient_AdaptToolChoice_ChangedFlag(t *testing.T) {
 			// Set model the way Call() does.
 			request.Model = tt.model
 
-			changed, err := adaptToolChoiceFor(false)(&request)
+			changed, err := adaptToolChoiceFor(nil)(&request)
 			if err != nil {
 				t.Fatalf("adaptToolChoice() error = %v", err)
 			}
@@ -729,7 +729,7 @@ func TestClient_AdaptConflictResolution_MutationDetection(t *testing.T) {
 func TestClient_AdaptToolChoiceFor_ThinkingFlag(t *testing.T) {
 	tests := []struct {
 		name        string
-		thinking    bool
+		thinking    *bool  // tri-state: nil=unset, true=thinking, false=opt-out
 		model       string // NOT in the hardcoded isThinkingModel list unless noted
 		requestJSON string
 		wantChanged bool
@@ -737,7 +737,7 @@ func TestClient_AdaptToolChoiceFor_ThinkingFlag(t *testing.T) {
 	}{
 		{
 			name:        "thinking:true + model not in hardcoded list → relaxed",
-			thinking:    true,
+			thinking:    boolPtr(true),
 			model:       "gpt-oss-120b", // new thinking model, not in isThinkingModel
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
 			wantChanged: true,
@@ -745,23 +745,39 @@ func TestClient_AdaptToolChoiceFor_ThinkingFlag(t *testing.T) {
 		},
 		{
 			name:        "thinking:false + model not in hardcoded list → untouched",
-			thinking:    false,
+			thinking:    boolPtr(false),
 			model:       "gpt-oss-120b",
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
 			wantChanged: false,
 			wantRaw:     "required",
 		},
 		{
-			name:        "thinking:false + listed model → still relaxed (fallback)",
-			thinking:    false,
+			name:        "thinking:false + listed model → untouched (explicit opt-out)",
+			thinking:    boolPtr(false),
 			model:       "deepseek-v4-flash", // in isThinkingModel
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: false,
+			wantRaw:     "required",
+		},
+		{
+			name:        "thinking:unset + listed model → relaxed (fallback)",
+			thinking:    nil, // flag absent → hardcoded isThinkingModel fallback
+			model:       "deepseek-v4-flash",
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
 			wantChanged: true,
 			wantRaw:     "auto",
 		},
 		{
+			name:        "thinking:unset + model not in hardcoded list → untouched",
+			thinking:    nil,
+			model:       "gpt-4",
+			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
+			wantChanged: false,
+			wantRaw:     "required",
+		},
+		{
 			name:        "thinking:true + no tool_choice → untouched",
-			thinking:    true,
+			thinking:    boolPtr(true),
 			model:       "gpt-oss-120b",
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}]}`,
 			wantChanged: false,
@@ -814,7 +830,7 @@ func TestNewClientWithRouteStep_ThinkingFlagPlumbsToAdapters(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Provider{Name: "p", APIKey: "k", BaseURL: server.URL}
-	step := config.RouteStep{Provider: "p", Model: "gpt-oss-120b", Thinking: true}
+	step := config.RouteStep{Provider: "p", Model: "gpt-oss-120b", Thinking: boolPtr(true)}
 	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "thinking-route")
 
 	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`
@@ -833,7 +849,7 @@ func TestNewClientWithRouteStep_ThinkingFlagPlumbsToAdapters(t *testing.T) {
 func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
 	tests := []struct {
 		name        string
-		thinking    bool
+		thinking    *bool
 		model       string
 		requestJSON string
 		wantChanged bool
@@ -841,7 +857,7 @@ func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
 	}{
 		{
 			name:        "string required → auto",
-			thinking:    true,
+			thinking:    boolPtr(true),
 			model:       "gpt-oss-120b",
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required"}`,
 			wantChanged: true,
@@ -849,7 +865,7 @@ func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
 		},
 		{
 			name:        "object form function → auto",
-			thinking:    true,
+			thinking:    boolPtr(true),
 			model:       "gpt-oss-120b",
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":{"type":"function","function":{"name":"final_result"}}}`,
 			wantChanged: true,
@@ -857,7 +873,7 @@ func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
 		},
 		{
 			name:        "none untouched",
-			thinking:    true,
+			thinking:    boolPtr(true),
 			model:       "gpt-oss-120b",
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"none"}`,
 			wantChanged: false,
@@ -865,7 +881,7 @@ func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
 		},
 		{
 			name:        "auto untouched",
-			thinking:    true,
+			thinking:    boolPtr(true),
 			model:       "gpt-oss-120b",
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":"auto"}`,
 			wantChanged: false,
@@ -873,7 +889,7 @@ func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
 		},
 		{
 			name:        "non-thinking object form untouched",
-			thinking:    false,
+			thinking:    boolPtr(false),
 			model:       "gpt-4", // not in hardcoded list, no flag
 			requestJSON: `{"model":"x","messages":[{"role":"user","content":"Hi"}],"tool_choice":{"type":"function","function":{"name":"final_result"}}}`,
 			wantChanged: false,
@@ -914,5 +930,34 @@ func TestClient_AdaptToolChoiceFor_ObjectForm(t *testing.T) {
 				t.Fatalf("tool_choice = %q, want %q", got, tt.wantRaw)
 			}
 		})
+	}
+}
+
+func TestClient_ToolChoice_ExplicitThinkingFalseOptsOutOfHardcodedList(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	cfg := config.Provider{Name: "opencode", APIKey: "k", BaseURL: server.URL}
+	step := config.RouteStep{Provider: "opencode", Model: "deepseek-v4-flash", Thinking: boolPtr(false)}
+	client := NewClientWithRouteStep(cfg, step, "30s", logger.NewLogger(), "test-route")
+
+	requestJSON := `{"model":"orig","messages":[{"role":"user","content":"Hi"}],"tool_choice":"required","tools":[{"type":"function","function":{"name":"final_result","parameters":{"type":"object","additionalProperties":false,"properties":{"verdict":{"type":"string"}}}}}],"stream":false}`
+	var request types.ChatRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, err := client.Call(context.Background(), request); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	if tc, ok := received["tool_choice"].(string); !ok || tc != "required" {
+		t.Fatalf("explicit Thinking:false must opt out of the hardcoded list: tool_choice relaxed to %v", received["tool_choice"])
 	}
 }
