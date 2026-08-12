@@ -214,7 +214,7 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 		m.logger.Info(stepCtx, "Trying route step", fields)
 
 		start := time.Now()
-		provider := newStepClient(providerCfg, step, m.config.DefaultStepTimeout, m.logger)
+		provider := newStepClient(providerCfg, step, m.config.DefaultStepTimeout, m.logger, route.Name)
 		response, err := provider.Call(stepCtx, request)
 		duration := time.Since(start)
 

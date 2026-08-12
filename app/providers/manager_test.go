@@ -1032,12 +1032,12 @@ func TestManager_Rotation_AdapterErrorFailsImmediatelyNotMarked(t *testing.T) {
 
 	origNewStepClient := newStepClient
 	defer func() { newStepClient = origNewStepClient }()
-	newStepClient = func(providerCfg config.Provider, step config.RouteStep, defaultStepTimeout string, l *logger.Logger) *Client {
-		c := NewClientWithRouteStep(providerCfg, step, defaultStepTimeout, l)
-		c.adapters = []RequestAdapter{
-			func(request *types.ChatRequest) error {
-				return fmt.Errorf("boom: unshapable request")
-			},
+	newStepClient = func(providerCfg config.Provider, step config.RouteStep, defaultStepTimeout string, l *logger.Logger, routeName string) *Client {
+		c := NewClientWithRouteStep(providerCfg, step, defaultStepTimeout, l, routeName)
+		c.adapters = []namedAdapter{
+			{name: "failing", fn: func(request *types.ChatRequest) (bool, error) {
+				return false, fmt.Errorf("boom: unshapable request")
+			}},
 		}
 		return c
 	}
