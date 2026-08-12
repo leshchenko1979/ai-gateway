@@ -89,15 +89,17 @@ func (m *Manager) stepInCooldown(key string) bool {
 	return ok && time.Now().Before(cd.until)
 }
 
-// markStepFailed records a step failure and sets its cooldown expiry.
-func (m *Manager) markStepFailed(route config.Route, step config.RouteStep) {
+// markStepFailed records a step failure and sets its cooldown expiry. The ctx
+// is the step/route context so the rotation log attaches to the active trace
+// span (decisions.md: log events must reach the exporter as span events).
+func (m *Manager) markStepFailed(ctx context.Context, route config.Route, step config.RouteStep) {
 	cooldown := m.config.GetStepCooldown(route)
 	key := cooldownKey(route.Name, step)
 	now := time.Now()
 	m.mu.Lock()
 	m.stepCooldowns[key] = stepCooldown{until: now.Add(cooldown), markedAt: now}
 	m.mu.Unlock()
-	m.logger.Info(context.Background(), "Step marked for rotation (will be skipped)",
+	m.logger.Info(ctx, "Step marked for rotation (will be skipped)",
 		map[string]interface{}{
 			"route":       route.Name,
 			"provider":    step.Provider,
@@ -296,7 +298,11 @@ func (m *Manager) ExecuteWithTracing(ctx context.Context, request types.ChatRequ
 			// permanent or client-fixable, rotation is futile and would mask
 			// the real cause), never adapter bugs (provider-independent).
 			if isRotatableError(err) {
-				m.markStepFailed(*route, step)
+				// routeCtx, not stepCtx: the step span is already ended at this
+				// point (stepSpan.End() ran above), so its events are dropped.
+				// The route span stays active until the function returns —
+				// the rotation log attaches to it as a span event.
+				m.markStepFailed(routeCtx, *route, step)
 			}
 			continue
 		}

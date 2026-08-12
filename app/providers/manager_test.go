@@ -15,6 +15,10 @@ import (
 	"ai-gateway/config"
 	"ai-gateway/logger"
 	"ai-gateway/types"
+
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func mustNewManager(t *testing.T, cfg *config.Config) *Manager {
@@ -1101,7 +1105,7 @@ func TestManager_Rotation_ConcurrentSuccessDoesNotClearNewerMark(t *testing.T) {
 
 	requestStart := time.Now().Add(-time.Second)
 
-	manager.markStepFailed(routes[0], routes[0].Steps[0])
+	manager.markStepFailed(context.Background(), routes[0], routes[0].Steps[0])
 	if !manager.stepInCooldown(key) {
 		t.Fatal("precondition: step must be in cooldown after markStepFailed")
 	}
@@ -1125,7 +1129,7 @@ func TestManager_Rotation_SuccessAfterMarkClearsIt(t *testing.T) {
 	})
 	key := cooldownKey("race-clear", routes[0].Steps[0])
 
-	manager.markStepFailed(routes[0], routes[0].Steps[0])
+	manager.markStepFailed(context.Background(), routes[0], routes[0].Steps[0])
 	if !manager.stepInCooldown(key) {
 		t.Fatal("precondition: step must be in cooldown after markStepFailed")
 	}
@@ -1199,5 +1203,52 @@ func TestManager_Rotation_AdapterErrorFailsImmediatelyNotMarked(t *testing.T) {
 	key := cooldownKey("rot-adapter", routes[0].Steps[0])
 	if manager.stepInCooldown(key) {
 		t.Fatal("adapter error must NOT mark the step for rotation (gateway bug, provider-independent)")
+	}
+}
+
+func TestManager_Rotation_MarkLogAttachesToTraceSpan(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(otel.GetTracerProvider()) // restore noop
+	})
+
+	flaky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(flaky.Close)
+
+	providers := []config.Provider{{Name: "flaky", APIKey: "k", BaseURL: flaky.URL}}
+	routes := []config.Route{
+		{Name: "trace-route", Steps: []config.RouteStep{{Provider: "flaky", Model: "gpt-4"}}},
+	}
+	manager := mustNewManager(t, &config.Config{
+		Providers:           providers,
+		Routes:              routes,
+		DefaultStepCooldown: "10s",
+	})
+
+	request := mustRequest(t, "trace-route")
+
+	if _, err := manager.Execute(request); err == nil {
+		t.Fatal("expected 5xx to fail the route")
+	}
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("expected at least one span from the failed route")
+	}
+	found := false
+	for _, span := range spans {
+		for _, ev := range span.Events {
+			if strings.Contains(ev.Name, "Step marked for rotation") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("rotation log must appear as a span event on the request trace (markStepFailed must use the step ctx, not context.Background())")
 	}
 }
