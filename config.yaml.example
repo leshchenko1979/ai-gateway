@@ -7,6 +7,12 @@ providers:
   - name: cerebras
     api_key: ${CEREBRAS_API_KEY}
     base_url: https://api.cerebras.ai/v1
+    strict_json_schema: true # cerebras/groq require additionalProperties:false in json_schema
+
+  - name: groq
+    api_key: ${GROQ_API_KEY}
+    base_url: https://api.groq.com/openai/v1/
+    strict_json_schema: true
 
   - name: openrouter
     api_key: ${OPENROUTER_API_KEY}
@@ -27,6 +33,7 @@ routes:
 
   - name: n8n-heavy
     route_timeout: 5m
+    step_cooldown: 5m # optional per-route rotation cooldown (default: default_step_cooldown or 60s)
     steps:
       - provider: cerebras
         model: gpt-oss-120b
