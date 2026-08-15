@@ -1,8 +1,8 @@
 # AI Gateway
 
-[![Build and deploy](https://github.com/leshchenko1979/ai-gateway/actions/workflows/deploy.yml/badge.svg)](https://github.com/leshchenko1979/ai-gateway/actions/workflows/deploy.yml)
+[![Build and deploy](https://github.com/alexeyleshchenko/ai-gateway/actions/workflows/deploy.yml/badge.svg)](https://github.com/alexeyleshchenko/ai-gateway/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go version](https://img.shields.io/github/go-mod/go-version/leshchenko1979/ai-gateway?filename=app%2Fgo.mod&logo=go&label=go)](app/go.mod)
+[![Go version](https://img.shields.io/github/go-mod/go-version/alexeyleshchenko/ai-gateway?filename=app%2Fgo.mod&logo=go&label=go)](app/go.mod)
 
 AI Gateway is a lightweight, OpenAI-compatible gateway you can self-host. You define one route per model name your app uses, and the gateway tries providers in order until one succeeds. This is useful when you want fewer failures from provider rate limits or temporary outages.
 
