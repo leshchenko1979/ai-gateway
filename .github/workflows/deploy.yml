@@ -77,7 +77,7 @@ jobs:
           envs: GHCR_PULL_TOKEN,GHCR_PULL_USER
           script: |
             set -euo pipefail
-            cd /root/services/ai-gateway
+            cd /data/projects/ai-gateway
             if [ -n "${GHCR_PULL_TOKEN:-}" ] && [ -n "${GHCR_PULL_USER:-}" ]; then
               echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_PULL_USER" --password-stdin
             fi

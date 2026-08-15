@@ -58,7 +58,7 @@ Pushes to `main` run `go test ./... -count=1` in `app/`. If tests pass, GitHub A
 ### Runtime on VDS
 
 - Keep a gitignored `config.yaml` and `.env` beside `docker-compose.yml`.
-- CI pushes `ghcr.io/<github.repository_owner>/ai-gateway`. Production compose still defaults to `ghcr.io/leshchenko1979/ai-gateway` until that image is published under **alexeyleshchenko**; override with `GHCR_IMAGE` / `IMAGE_TAG` on the VDS.
+- CI pushes `ghcr.io/<github.repository_owner>/ai-gateway`. Compose defaults to `ghcr.io/alexeyleshchenko/ai-gateway` (`IMAGE_TAG` default `main`). Override with `GHCR_IMAGE` / `IMAGE_TAG` on the VDS.
 - Set `GHCR_IMAGE` and `IMAGE_TAG` in VDS `.env` if you use a fork or pinned tag.
 
 ### Sync config and env from local machine
