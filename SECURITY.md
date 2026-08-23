@@ -4,7 +4,7 @@
 
 Please report security issues **privately** instead of opening a public GitHub issue.
 
-- Use **[GitHub Security Advisories](https://github.com/alexeyleshchenko/ai-gateway/security/advisories)** for this repository: *Report a vulnerability* if the feature is enabled.
+- Use **[GitHub Security Advisories](https://github.com/leshchenko1979/ai-gateway/security/advisories)** for this repository: *Report a vulnerability* if the feature is enabled.
 - If advisories are unavailable, contact the repository maintainers through a private channel.
 
 Include enough detail to reproduce or assess the issue (affected component, configuration, and impact). We will treat reports confidentially and coordinate a fix and disclosure timeline with you.
@@ -18,7 +18,7 @@ We treat the following as **in scope** for coordinated disclosure when they affe
 - Remote code execution or unsafe deserialization via request handling
 - Denial of service with a realistic high-impact scenario (not generic load testing)
 
-**Out of scope** for private advisories (use regular [issues](https://github.com/alexeyleshchenko/ai-gateway/issues) instead): deployment mistakes (misconfigured Traefik, leaked `.env` on disk), provider outages, or issues in dependencies unless they require a gateway-side change.
+**Out of scope** for private advisories (use regular [issues](https://github.com/leshchenko1979/ai-gateway/issues) instead): deployment mistakes (misconfigured Traefik, leaked `.env` on disk), provider outages, or issues in dependencies unless they require a gateway-side change.
 
 ## Supported versions
 

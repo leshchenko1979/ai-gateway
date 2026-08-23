@@ -2,7 +2,7 @@
 
 ## Issues and security
 
-- **General bugs and features:** open a [GitHub issue](https://github.com/alexeyleshchenko/ai-gateway/issues) with what you expected, what happened, and how to reproduce when relevant.
+- **General bugs and features:** open a [GitHub issue](https://github.com/leshchenko1979/ai-gateway/issues) with what you expected, what happened, and how to reproduce when relevant.
 - **Security vulnerabilities:** do **not** file a public issue. Follow [SECURITY.md](SECURITY.md).
 
 ## Development setup
@@ -58,7 +58,7 @@ Pushes to `main` run `go test ./... -count=1` in `app/`. If tests pass, GitHub A
 ### Runtime on VDS
 
 - Keep a gitignored `config.yaml` and `.env` beside `docker-compose.yml`.
-- CI pushes `ghcr.io/<github.repository_owner>/ai-gateway`. Compose defaults to `ghcr.io/alexeyleshchenko/ai-gateway` (`IMAGE_TAG` default `main`). Override with `GHCR_IMAGE` / `IMAGE_TAG` on the VDS.
+- CI pushes `ghcr.io/<github.repository_owner>/ai-gateway`. Compose defaults to `ghcr.io/leshchenko1979/ai-gateway` (`IMAGE_TAG` default `main`). Override with `GHCR_IMAGE` / `IMAGE_TAG` on the VDS.
 - Set `GHCR_IMAGE` and `IMAGE_TAG` in VDS `.env` if you use a fork or pinned tag.
 
 ### Sync config and env from local machine

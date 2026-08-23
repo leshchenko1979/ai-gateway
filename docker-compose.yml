@@ -1,6 +1,6 @@
 services:
   ai-gateway:
-    image: ${GHCR_IMAGE:-ghcr.io/alexeyleshchenko/ai-gateway}:${IMAGE_TAG:-main}
+    image: ${GHCR_IMAGE:-ghcr.io/leshchenko1979/ai-gateway}:${IMAGE_TAG:-main}
     container_name: ai-gateway
     restart: always
     env_file: .env
